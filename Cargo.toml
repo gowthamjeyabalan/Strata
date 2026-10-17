@@ -1,0 +1,38 @@
+[package]
+name = "overlay"
+version = "0.1.0"
+edition = "2024"
+description = "A whiteboard where every image, sketch, shape and flowchart box is a node in a graph"
+license = "MIT"
+repository = "https://github.com/gowthamjeyabalan/overlay"
+authors = ["Gowtham Jeyabalan"]
+
+[dependencies]
+# OpenGL renderer: much lighter than the default wgpu one (memory, start-up, binary size). Only the
+# features Overlay uses on Windows; the default fonts stay as the fallback for symbols.
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence"] }
+egui = "0.36"
+egui_dock = { version = "0.21", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.17"
+# Only the formats the image picker offers (and PNG/JPG for export and the clipboard).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tiff"] }
+arboard = "3"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2

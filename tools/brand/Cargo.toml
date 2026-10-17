@@ -1,0 +1,11 @@
+[package]
+name = "overlay-brand"
+version = "0.1.0"
+edition = "2024"
+description = "Generates Overlay's brand kit (SVG, PNG, ICO) into ../../brand"
+publish = false
+
+[dependencies]
+resvg = "0.48"
+ttf-parser = "0.25"
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
