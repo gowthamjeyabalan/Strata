@@ -416,11 +416,17 @@ pub struct Object {
     /// The layer it is on. 0 until it is placed on one.
     #[serde(default)]
     pub layer: Id,
+    /// When it was made (`YYYY-MM-DD HH:MM:SS`), filled in when the change is recorded.
+    #[serde(default)]
+    pub created: String,
+    /// Every day (`YYYY-MM-DD`) it was made or changed, oldest first.
+    #[serde(default)]
+    pub days: Vec<String>,
 }
 
 impl Object {
     pub fn new(id: Id, rect: Rect, kind: Kind, label: String, style: Style) -> Self {
-        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0 };
+        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0, created: String::new(), days: Vec::new() };
         o.set_rect(rect);
         o
     }
@@ -554,6 +560,9 @@ pub struct Board {
     /// Back to front. Every object is on one; their order decides what is in front.
     #[serde(default)]
     pub layers: Vec<Layer>,
+    /// Items left out by the calendar's day filter: treated as hidden. Set every frame, never saved.
+    #[serde(skip)]
+    pub veil: std::collections::HashSet<Id>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -658,11 +667,14 @@ impl Board {
                 proxy.insert(d, stand_in);
             }
         }
-        Lookup { index, proxy, inner: self.sketch_inner() }
+        Lookup { index, proxy, inner: self.sketch_inner(), veil: self.veil.clone() }
     }
 
     /// Is `id` inside a collapsed group (at any depth)?
     pub fn hidden(&self, id: Id) -> bool {
+        if self.veil.contains(&id) {
+            return true;
+        }
         let mut cur = id;
         while let Some(p) = self.parent(cur) {
             if matches!(self.get(p).map(|o| &o.kind), Some(Kind::Group { collapsed: true, .. })) {
@@ -677,7 +689,9 @@ impl Board {
     pub fn hidden_set(&self) -> std::collections::HashSet<Id> {
         let collapsed: Vec<Id> = self.objects.iter().filter(|o| matches!(o.kind, Kind::Group { collapsed: true, .. })).map(|o| o.id).collect();
         let members: Vec<Id> = collapsed.iter().flat_map(|g| self.members(*g)).collect();
-        self.with_descendants(&members).into_iter().collect()
+        let mut out: std::collections::HashSet<Id> = self.with_descendants(&members).into_iter().collect();
+        out.extend(self.veil.iter().copied());
+        out
     }
 
     /// What stands in for `id` on screen: the outermost collapsed group around it, or itself.
@@ -884,6 +898,9 @@ impl Board {
     /// World points of a wire's line, from its start port to its end port.
     /// Connections to items inside a collapsed group attach to the group; ones that stay inside it are not drawn.
     pub fn wire_points(&self, w: &Wire) -> Option<Vec<Pos2>> {
+        if self.veil.contains(&w.from) || self.veil.contains(&w.to) {
+            return None;
+        }
         let (pa, pb) = (self.proxy(w.from), self.proxy(w.to));
         if pa == pb {
             return None;
@@ -926,6 +943,8 @@ pub struct Lookup {
     proxy: std::collections::HashMap<Id, Id>,
     /// Strokes inside sketches: drawn, but without ports or controls of their own.
     inner: std::collections::HashSet<Id>,
+    /// Left out by the day filter.
+    veil: std::collections::HashSet<Id>,
 }
 
 impl Lookup {
@@ -933,7 +952,7 @@ impl Lookup {
         self.index.get(&id).and_then(|i| b.objects.get(*i)).filter(|o| o.id == id)
     }
     pub fn hidden(&self, id: Id) -> bool {
-        self.proxy.contains_key(&id)
+        self.proxy.contains_key(&id) || self.veil.contains(&id)
     }
     pub fn in_sketch(&self, id: Id) -> bool {
         self.inner.contains(&id)
@@ -943,6 +962,9 @@ impl Lookup {
     }
     /// Same as `Board::wire_points`, without scanning the board.
     pub fn wire_points(&self, b: &Board, w: &Wire) -> Option<Vec<Pos2>> {
+        if self.veil.contains(&w.from) || self.veil.contains(&w.to) {
+            return None;
+        }
         let (pa, pb) = (self.proxy(w.from), self.proxy(w.to));
         if pa == pb {
             return None;

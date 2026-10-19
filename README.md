@@ -43,6 +43,11 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Lock items, change opacity, and add comment threads to any item.
 - A Graph panel listing connections, and a floating Overview map of the whole board.
 
+**Calendar**
+- Every item records when it was made and each day it was changed, automatically. Boards with history get dates from it.
+- The Calendar panel shows a week as day cards, each listing that day's items, with a bar showing how much was done.
+- Choose days to highlight their items on the board, or show only those items.
+
 **Style**
 - Style presets, solid or gradient fills, solid, dashed or dotted lines, rounded corners, and sketch, glass and shadow effects.
 - An eyedropper that takes a colour from any item, or from a pixel of an image.
@@ -96,7 +101,9 @@ Pan with the right or middle mouse button, or hold Space and drag. The mouse whe
 | Locking | Locked items can be selected but not moved, edited, erased or deleted. |
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
 | History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
-| Panels | Select, pan, connect, text and images are in the strip on the left. Draw, Shapes, Flowchart, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
+| Tools | The floating Tools card over the board holds select, pan, connect, text, images and the view switches, then Draw, Shapes and Flowchart. Drag it by an empty part; the arrow folds it to its title. |
+| Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
+| Panels | Calendar, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
 
 </details>
 
@@ -126,7 +133,8 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/snap.rs` | Snapping to edges, centres and equal gaps |
 | `src/insert.rs` | The `/` list |
 | `src/export.rs` | PNG and JPG export (a small software renderer) |
-| `src/panels.rs`, `src/overview.rs` | Tool strip, Draw, Shapes, Flowchart, Properties, Layers, Graph, History and the Overview |
+| `src/panels.rs`, `src/overview.rs` | The Tools card, Properties, Layers, Graph, History and the Overview |
+| `src/dates.rs`, `src/calendar.rs` | Dates on items and the Calendar |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 
 The look follows the **Grapht** design system: a quiet grey interface with one blue accent, Inter type, and round strokes. Its tokens and notes are in [`design/`](design). The logo is an "O" left open and closed by a blue dot; the brand kit and its generator are in [`brand/`](brand).

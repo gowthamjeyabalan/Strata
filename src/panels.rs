@@ -1,4 +1,4 @@
-//! The tool strip and the dockable panels: Draw, Shapes, Flowchart, Properties, Layers and Graph.
+//! The floating toolbox and the dockable panels: Properties, Layers and Graph.
 
 use crate::board::{self, Dash, Id, Ink, Kind, Shape, Style, WireStyle};
 use crate::canvas::paint_shape;
@@ -8,7 +8,7 @@ use crate::theme::{self, UiExt, pal};
 use crate::tools::{self, Tool};
 use egui::{Color32, CornerRadius, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, pos2, vec2};
 
-/// Icon button. Selected uses the accent fill, the only chrome colour.
+/// Icon button: a squircle tile. Selected uses the accent fill, the only chrome colour.
 fn icon_button(ui: &mut Ui, size: f32, selected: bool, tip: &str, paint: impl FnOnce(&egui::Painter, egui::Rect, Color32, Color32)) -> egui::Response {
     let p = pal(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
@@ -19,9 +19,9 @@ fn icon_button(ui: &mut Ui, size: f32, selected: bool, tip: &str, paint: impl Fn
     } else if resp.hovered() {
         p.bg_control_hover
     } else {
-        Color32::TRANSPARENT
+        p.bg_control
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(8), bg);
+    ui.painter().rect_filled(rect, CornerRadius::same(10), bg);
     let (fg, dot) = if selected { (Color32::WHITE, Color32::WHITE) } else { (p.text, p.accent) };
     paint(ui.painter(), rect.shrink(size * 0.2), fg, dot);
     resp.on_hover_text(tip)
@@ -121,94 +121,114 @@ fn pick_tool(ed: &mut Editor, t: Tool) {
     ed.tool = t;
 }
 
-/// The fixed strip at the left edge: picking, panning and the tools every kind of work uses, then
-/// view switches.
-pub fn tool_strip(ui: &mut Ui, ed: &mut Editor, show_overview: &mut bool) {
-    ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-    ui.add_space(4.0);
-    for t in [Tool::Select, Tool::Hand, Tool::Connect, Tool::Text] {
-        let tip = format!("{} ({})", t.name(), t.key_name());
-        if icon_button(ui, TOOL_PX, ed.tool == t, &tip, |p, r, c, d| tools::paint_icon(p, r, t, c, d)).clicked() {
-            pick_tool(ed, t);
-        }
-    }
-    if icon_button(ui, TOOL_PX, false, "Insert image (Ctrl+I)", tools::paint_image_icon).clicked() {
-        ed.pick_images();
-    }
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(4.0);
-    if icon_button(ui, TOOL_PX, false, "Zoom to fit (Shift+1)", tools::paint_fit_icon).clicked() {
-        ed.zoom_to_fit();
-    }
-    if icon_button(ui, TOOL_PX, *show_overview, "Overview (M)", tools::paint_overview_icon).clicked() {
-        *show_overview = !*show_overview;
-    }
-    let snap_tip = if ed.snapping { "Snapping is on: items line up with each other. Alt skips it for one drag." } else { "Snapping is off" };
-    if icon_button(ui, TOOL_PX, ed.snapping, snap_tip, tools::paint_snap_icon).clicked() {
-        ed.snapping = !ed.snapping;
-    }
-}
+/// Width of four tool tiles and the gaps between them.
+const TOOLBOX_W: f32 = 4.0 * TOOL_PX + 3.0 * 4.0;
 
-/// Freehand drawing: the brushes and eraser, width and colour.
-pub fn draw_ui(ui: &mut Ui, ed: &mut Editor) {
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        tool_grid(ui, ed, &[Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser]);
-        ui.add_space(4.0);
-        width_control(ui, ed);
-        ui.add_space(2.0);
-        if let Some(ink) = ink_row(ui, ed.style.ink) {
-            ed.style.ink = ink;
-            apply_to_selection(ed, |s| s.ink = ink);
-        }
-    });
-}
-
-/// Lines and plain shapes.
-pub fn shapes_ui(ui: &mut Ui, ed: &mut Editor) {
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        tool_grid(ui, ed, &[Tool::Line, Tool::Arrow, Tool::Polyline, Tool::Rectangle, Tool::Ellipse]);
-        ui.add_space(4.0);
-        let mut curved = ed.poly_curved;
-        if ui.segmented(&mut curved, &[(false, "Straight"), (true, "Curved")]) {
-            ed.poly_curved = curved;
-            pick_tool(ed, Tool::Polyline);
-        }
-        if ed.tool == Tool::Polyline {
-            ui.label(theme::secondary(ui, "Click to add points. Double-click or Enter ends the line; clicking the first point closes it. Shift keeps 45° steps."));
-        }
-    });
-}
-
-/// Flowchart boxes and how new connections are drawn.
-pub fn flowchart_ui(ui: &mut Ui, ed: &mut Editor) {
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        ui.horizontal_wrapped(|ui| {
-            // Choosing a shape switches to the flowchart box tool.
-            for s in Shape::FLOW {
-                let sel = ed.tool == Tool::Node && ed.node_shape == s;
-                let resp = icon_button(ui, TOOL_PX, sel, s.name(), |p, r, c, _| {
-                    let r = if matches!(s, Shape::Connector) { egui::Rect::from_center_size(r.center(), vec2(r.height(), r.height()) * 0.8) } else { r.shrink2(vec2(0.0, r.height() * 0.15)) };
-                    paint_shape(p, s, r, 0.35, Color32::TRANSPARENT, Stroke::new(1.4, c));
+/// The floating toolbox over the board: picking and view switches, then Draw, Shapes and Flowchart.
+pub fn toolbox(ctx: &egui::Context, ed: &mut Editor, show_overview: &mut bool) {
+    let canvas = ed.canvas_rect;
+    if canvas.width() < 120.0 || canvas.height() < 120.0 {
+        return;
+    }
+    let p = pal(ctx);
+    let collapsed_id = egui::Id::new("toolbox-collapsed");
+    let mut collapsed = ctx.data(|d| d.get_temp::<bool>(collapsed_id)).unwrap_or(false);
+    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(10));
+    // A floating card: drag it by its title or any empty part.
+    egui::Area::new(egui::Id::new("toolbox"))
+        .default_pos(canvas.left_top() + vec2(12.0, 12.0))
+        .constrain_to(canvas)
+        .movable(true)
+        .order(egui::Order::Middle)
+        .show(ctx, |ui| {
+            frame.show(ui, |ui| {
+                ui.set_width(TOOLBOX_W);
+                ui.horizontal(|ui| {
+                    ui.label(theme::semibold("Tools").size(12.0).color(p.text));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let tip = if collapsed { "Show the tools" } else { "Fold the toolbox to its title" };
+                        // A small chevron: down while open, right while folded.
+                        let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                        let c = if resp.hovered() { p.accent } else { p.text_secondary };
+                        let m = r.center();
+                        let pts = if collapsed { vec![m + vec2(-2.0, -4.0), m + vec2(2.0, 0.0), m + vec2(-2.0, 4.0)] } else { vec![m + vec2(-4.0, -2.0), m + vec2(0.0, 2.0), m + vec2(4.0, -2.0)] };
+                        ui.painter().add(egui::Shape::line(pts, Stroke::new(1.6, c)));
+                        if resp.on_hover_text(tip).clicked() {
+                            collapsed = !collapsed;
+                        }
+                    });
                 });
-                if resp.clicked() {
-                    ed.node_shape = s;
-                    pick_tool(ed, Tool::Node);
+                if collapsed {
+                    return;
                 }
+                ui.add_space(4.0);
+                // Scrolls when the board is shorter than the toolbox.
+                let room = (canvas.height() - 70.0).max(80.0);
+                ScrollArea::vertical().max_height(room).min_scrolled_height(room.min(640.0)).auto_shrink([false, true]).show(ui, |ui| {
+            ui.set_width(TOOLBOX_W);
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            tool_grid(ui, ed, &[Tool::Select, Tool::Hand, Tool::Connect, Tool::Text]);
+            ui.horizontal(|ui| {
+                if icon_button(ui, TOOL_PX, false, "Insert image (Ctrl+I)", tools::paint_image_icon).clicked() {
+                    ed.pick_images();
+                }
+                if icon_button(ui, TOOL_PX, false, "Zoom to fit (Shift+1)", tools::paint_fit_icon).clicked() {
+                    ed.zoom_to_fit();
+                }
+                if icon_button(ui, TOOL_PX, *show_overview, "Overview (M)", tools::paint_overview_icon).clicked() {
+                    *show_overview = !*show_overview;
+                }
+                let snap_tip = if ed.snapping { "Snapping is on: items line up with each other. Alt skips it for one drag." } else { "Snapping is off" };
+                if icon_button(ui, TOOL_PX, ed.snapping, snap_tip, tools::paint_snap_icon).clicked() {
+                    ed.snapping = !ed.snapping;
+                }
+            });
+
+            theme::heading(ui, "DRAW");
+            tool_grid(ui, ed, &[Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser]);
+            ui.add_space(2.0);
+            width_control(ui, ed);
+            if let Some(ink) = ink_row(ui, ed.style.ink) {
+                ed.style.ink = ink;
+                apply_to_selection(ed, |s| s.ink = ink);
             }
-        });
-        ui.add_space(4.0);
-        theme::heading(ui, "CONNECTIONS");
-        // A menu rather than a segmented control: the column is narrow.
-        egui::ComboBox::from_id_salt("flow-wire-style").width((ui.available_width() - 8.0).max(60.0)).selected_text(ed.wire_style.name()).show_ui(ui, |ui| {
-            for s in [WireStyle::Curve, WireStyle::Straight, WireStyle::Elbow] {
-                ui.selectable_value(&mut ed.wire_style, s, s.name());
+
+            theme::heading(ui, "SHAPES");
+            tool_grid(ui, ed, &[Tool::Line, Tool::Arrow, Tool::Polyline, Tool::Rectangle, Tool::Ellipse]);
+            let mut curved = ed.poly_curved;
+            if ui.segmented(&mut curved, &[(false, "Straight"), (true, "Curved")]) {
+                ed.poly_curved = curved;
+                pick_tool(ed, Tool::Polyline);
             }
+            if ed.tool == Tool::Polyline {
+                ui.label(theme::secondary(ui, "Click to add points. Double-click or Enter ends the line; click the first point to close it."));
+            }
+
+            theme::heading(ui, "FLOWCHART");
+            ui.horizontal_wrapped(|ui| {
+                // Choosing a shape switches to the flowchart box tool.
+                for s in Shape::FLOW {
+                    let sel = ed.tool == Tool::Node && ed.node_shape == s;
+                    let resp = icon_button(ui, TOOL_PX, sel, s.name(), |p, r, c, _| {
+                        let r = if matches!(s, Shape::Connector) { egui::Rect::from_center_size(r.center(), vec2(r.height(), r.height()) * 0.8) } else { r.shrink2(vec2(0.0, r.height() * 0.15)) };
+                        paint_shape(p, s, r, 0.35, Color32::TRANSPARENT, Stroke::new(1.4, c));
+                    });
+                    if resp.clicked() {
+                        ed.node_shape = s;
+                        pick_tool(ed, Tool::Node);
+                    }
+                }
+            });
+            ui.add_space(2.0);
+            egui::ComboBox::from_id_salt("flow-wire-style").width(TOOLBOX_W).selected_text(format!("{} connections", ed.wire_style.name())).show_ui(ui, |ui| {
+                for s in [WireStyle::Curve, WireStyle::Straight, WireStyle::Elbow] {
+                    ui.selectable_value(&mut ed.wire_style, s, s.name());
+                }
+            });
+                });
+            });
         });
-    });
+    ctx.data_mut(|d| d.insert_temp(collapsed_id, collapsed));
 }
 
 /// Apply a style change to every selected object. A burst of changes (dragging a slider) becomes one state.

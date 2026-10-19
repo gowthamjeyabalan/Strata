@@ -14,11 +14,12 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum Tab {
     Board,
-    /// Layouts saved before the tools were split up still name this tab; it shows as Draw.
+    /// Older layouts name these; the tools now live in the floating toolbox.
     Tools,
     Draw,
     Shapes,
     Flowchart,
+    Calendar,
     Properties,
     Layers,
     Graph,
@@ -43,17 +44,15 @@ struct Settings {
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 3;
+const DOCK_VERSION: u32 = 4;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
     let s = d.main_surface_mut();
-    // The board keeps most of the window; Draw, Shapes and Flowchart are stacked in a narrow column,
-    // the other panels on the right. For a left split the fraction is the new (left) pane's share.
-    let [board, draw] = s.split_left(NodeIndex::root(), 0.1, vec![Tab::Draw]);
-    let [_draw, shapes] = s.split_below(draw, 0.36, vec![Tab::Shapes]);
-    s.split_below(shapes, 0.45, vec![Tab::Flowchart]);
-    s.split_right(board, 0.8, vec![Tab::Properties, Tab::Layers, Tab::Graph, Tab::History]);
+    // The board keeps most of the window (the tools float over it), the Calendar sits under it, and
+    // the other panels are on the right.
+    let [board, _panels] = s.split_right(NodeIndex::root(), 0.8, vec![Tab::Properties, Tab::Layers, Tab::Graph, Tab::History]);
+    s.split_below(board, 0.74, vec![Tab::Calendar]);
     d
 }
 
@@ -527,9 +526,8 @@ impl TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Board => "Board",
-            Tab::Tools | Tab::Draw => "Draw",
-            Tab::Shapes => "Shapes",
-            Tab::Flowchart => "Flowchart",
+            Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => "Tools",
+            Tab::Calendar => "Calendar",
             Tab::Properties => "Properties",
             Tab::Layers => "Layers",
             Tab::Graph => "Graph",
@@ -541,9 +539,10 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut Ui, tab: &mut Tab) {
         match tab {
             Tab::Board => self.ed.canvas_ui(ui),
-            Tab::Tools | Tab::Draw => panels::draw_ui(ui, self.ed),
-            Tab::Shapes => panels::shapes_ui(ui, self.ed),
-            Tab::Flowchart => panels::flowchart_ui(ui, self.ed),
+            Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => {
+                ui.label(theme::secondary(ui, "The tools are in the floating Tools window over the board. View > Reset panel layout removes this tab."));
+            }
+            Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
             Tab::Graph => panels::graph_ui(ui, self.ed),
@@ -633,14 +632,10 @@ impl App {
 
         let p = pal(&ctx);
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(6, 4))).show(ui, |ui| self.top_bar(ui));
-        // The tool strip down the left edge, like the toolbox in a paint program.
-        egui::Panel::left("tool-strip")
-            .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin { left: 6, right: 2, top: 2, bottom: 6 }))
-            .resizable(false)
-            .exact_size(32.0)
-            .show(ui, |ui| panels::tool_strip(ui, &mut self.ed, &mut self.show_overview));
         // New items go on the current layer; the item list stays in layer order.
         self.ed.board.fix_layers(&mut self.ed.active_layer);
+        // The Calendar's chosen days hide or fade the other items.
+        self.ed.apply_day_filter();
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| {
             let style = theme::dock_style(ui.ctx());
             DockArea::new(&mut self.dock)
@@ -651,6 +646,7 @@ impl App {
                 .show_inside(ui, &mut Viewer { ed: &mut self.ed });
         });
 
+        panels::toolbox(&ctx, &mut self.ed, &mut self.show_overview);
         overview::show(&ctx, &mut self.ed, &mut self.show_overview);
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);

@@ -3,7 +3,9 @@
 
 mod app;
 mod board;
+mod calendar;
 mod canvas;
+mod dates;
 mod editor;
 mod export;
 mod history;

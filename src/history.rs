@@ -55,7 +55,7 @@ impl Snapshot {
 
     /// An editable board from this state.
     pub fn to_board(&self) -> Board {
-        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone() }
+        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), veil: Default::default() }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

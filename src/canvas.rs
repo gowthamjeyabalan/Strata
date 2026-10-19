@@ -944,6 +944,7 @@ impl Editor {
         };
         let look = self.board.lookup();
         self.paint_scene(&ctx, &painter, origin, &look);
+        self.draw_day_marks(&painter, origin, p, &look);
         self.draw_ports(&painter, origin, p, hovered, &look);
         self.draw_selection(&painter, origin, p, hovered, &look);
         self.draw_controls(&painter, p, hovered, &look);
@@ -997,6 +998,21 @@ impl Editor {
         }
         // Wires on top of objects so they are never hidden behind a group or an image.
         self.draw_wires(painter, origin, p, look);
+    }
+
+    /// A soft highlighter behind each item from the days chosen in the Calendar.
+    fn draw_day_marks(&self, painter: &Painter, origin: Pos2, p: &Pal, look: &board::Lookup) {
+        if self.day_direct.is_empty() {
+            return;
+        }
+        for id in &self.day_direct {
+            if look.hidden(*id) || look.in_sketch(*id) {
+                continue;
+            }
+            let Some(o) = look.get(&self.board, *id) else { continue };
+            let r = self.camera.rect_to_screen(origin, o.rect()).expand(7.0);
+            painter.rect(r, 8.0, p.accent.gamma_multiply(0.08), Stroke::new(2.0, p.accent.gamma_multiply(0.7)), StrokeKind::Outside);
+        }
     }
 
     /// Only the ports that have connections, as in an export.
@@ -1110,8 +1126,10 @@ impl Editor {
     fn draw_object(&self, painter: &Painter, origin: Pos2, o: &Object, p: &Pal, tex: Option<egui::TextureId>, editing: bool) -> Option<f32> {
         let z = self.camera.zoom;
         let r = self.camera.rect_to_screen(origin, o.rect());
-        // Every colour of the item is faded by its opacity.
-        let alpha = o.opacity.clamp(0.05, 1.0);
+        // Every colour of the item is faded by its opacity, and further while the Calendar highlights
+        // other days' items.
+        let faded = !self.day_shown.is_empty() && !self.day_shown.contains(&o.id);
+        let alpha = o.opacity.clamp(0.05, 1.0) * if faded { 0.18 } else { 1.0 };
         let fade = |c: Color32| if alpha >= 1.0 { c } else { c.gamma_multiply(alpha) };
         let ink = fade(o.style.ink.color(p));
         let stroke = Stroke::new((o.style.width * z).max(0.75), ink);

@@ -182,7 +182,10 @@ pub fn render(ctx: &egui::Context, ed: &mut Editor, world: Rect, scale: f32, bac
     let layer = LayerId::new(Order::Background, Id::new("overlay-export"));
     let painter = egui::Painter::new(ctx.clone(), layer, frame);
     let look = ed.board.lookup();
+    // Exports show items at full strength even while the Calendar fades some.
+    let shown = std::mem::take(&mut ed.day_shown);
     ed.paint_scene(ctx, &painter, Pos2::ZERO, &look);
+    ed.day_shown = shown;
     ed.paint_wired_ports(&painter, Pos2::ZERO, pal(ctx), &look);
     let shapes: Vec<egui::epaint::ClippedShape> = ctx.graphics_mut(|g| std::mem::take(g.entry(layer))).all_entries().cloned().collect();
     (ed.camera, ed.selection, ed.selected_wire, ed.hover_world, ed.tool, ed.editing, ed.editing_wire) = saved;

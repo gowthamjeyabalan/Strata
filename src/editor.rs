@@ -55,6 +55,15 @@ pub struct Editor {
     pub poly: Vec<Pos2>,
     /// The polyline tool draws a smooth curve through its points.
     pub poly_curved: bool,
+    /// Calendar: weeks before (negative) or after this one.
+    pub cal_week: i64,
+    /// Calendar: the chosen days, `YYYY-MM-DD`.
+    pub cal_days: Vec<String>,
+    /// What the chosen days do to the board.
+    pub day_mode: crate::dates::DayMode,
+    /// While highlighting: everything shown at full strength, and the items from the chosen days.
+    pub(crate) day_shown: std::collections::HashSet<Id>,
+    pub(crate) day_direct: std::collections::HashSet<Id>,
 
     /// Object whose label is being typed on the canvas.
     pub editing: Option<Id>,
@@ -105,6 +114,11 @@ impl Default for Editor {
             active_layer: 0,
             poly: Vec::new(),
             poly_curved: false,
+            cal_week: 0,
+            cal_days: Vec::new(),
+            day_mode: crate::dates::DayMode::All,
+            day_shown: Default::default(),
+            day_direct: Default::default(),
             editing: None,
             editing_wire: None,
             eyedropper: None,
@@ -166,6 +180,31 @@ impl Editor {
         }
     }
 
+    /// Apply the Calendar's chosen days to the board: hide or fade the items from other days.
+    pub fn apply_day_filter(&mut self) {
+        use crate::dates::DayMode;
+        if self.cal_days.is_empty() || self.day_mode == DayMode::All {
+            if !self.board.veil.is_empty() || !self.day_shown.is_empty() {
+                self.board.veil.clear();
+                self.day_shown.clear();
+                self.day_direct.clear();
+            }
+            return;
+        }
+        let (shown, direct) = crate::dates::matching(&self.board, &self.cal_days);
+        if self.day_mode == DayMode::Only {
+            self.board.veil = self.board.objects.iter().map(|o| o.id).filter(|id| !shown.contains(id)).collect();
+            self.day_shown.clear();
+            self.day_direct.clear();
+            let veil = &self.board.veil;
+            self.selection.retain(|id| !veil.contains(id));
+        } else {
+            self.board.veil.clear();
+            self.day_shown = shown;
+            self.day_direct = direct;
+        }
+    }
+
     // ── history ──
 
     /// The board has changed. It becomes a state once the change settles (see `tick`).
@@ -177,6 +216,8 @@ impl Editor {
     /// Record a state now if a change is waiting.
     pub fn flush(&mut self) {
         if self.pending.take().is_some() {
+            // New and changed items get today's date.
+            crate::dates::stamp(&self.history.current().board, &mut self.board, &crate::history::now());
             if let Some((change, branched)) = self.history.record(&self.board) {
                 if branched {
                     let name = self.history.branch(self.history.current().branch).map(|b| b.name.clone()).unwrap_or_default();
@@ -548,8 +589,10 @@ impl Editor {
                     *image = *x;
                 }
             }
-            // Pasted items land on the current layer.
+            // Pasted items land on the current layer, and are new today.
             n.layer = self.active_layer;
+            n.created.clear();
+            n.days.clear();
             map.insert(o.id, n.id);
             new_ids.push(n.id);
             self.board.objects.push(n);
@@ -737,7 +780,11 @@ impl Editor {
         // The file keeps every image any state uses; the board only needs its own.
         self.board.gc_images();
         self.history = match f.history.and_then(|h| History::from_file(h, &pool)) {
-            Some(h) => h,
+            Some(h) => {
+                // Boards from before items had dates take them from their history.
+                crate::dates::backfill(&h, &mut self.board);
+                h
+            }
             None => History::new(&self.board, "Opened"),
         };
         self.camera = f.camera;
