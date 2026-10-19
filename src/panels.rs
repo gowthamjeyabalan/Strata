@@ -232,7 +232,7 @@ pub fn toolbox(ctx: &egui::Context, ed: &mut Editor, show_overview: &mut bool) {
 }
 
 /// Apply a style change to every selected object. A burst of changes (dragging a slider) becomes one state.
-fn apply_to_selection(ed: &mut Editor, f: impl Fn(&mut Style)) {
+pub(crate) fn apply_to_selection(ed: &mut Editor, f: impl Fn(&mut Style)) {
     if ed.selection.is_empty() {
         return;
     }

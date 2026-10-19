@@ -12,6 +12,7 @@ mod history;
 mod insert;
 mod overview;
 mod palettes;
+mod radial;
 mod panels;
 mod shapes;
 mod snap;

@@ -648,6 +648,12 @@ impl App {
         });
 
         panels::toolbox(&ctx, &mut self.ed, &mut self.show_overview);
+        // The radial menu's Properties brings that panel to the front.
+        if std::mem::take(&mut self.ed.want_properties) {
+            if let Some(path) = self.dock.find_tab(&Tab::Properties) {
+                let _ = self.dock.set_active_tab(path);
+            }
+        }
         overview::show(&ctx, &mut self.ed, &mut self.show_overview);
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);

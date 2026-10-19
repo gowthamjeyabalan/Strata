@@ -834,7 +834,25 @@ impl Editor {
                 self.camera.pan_by(vec2(scroll.x, 0.0));
             }
         }
-        if resp.dragged_by(PointerButton::Middle) || resp.dragged_by(PointerButton::Secondary) {
+        // Holding the right button on an item opens the radial menu for the selection; on empty
+        // board it pans, as the middle button does.
+        let right_pressed = ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
+        if right_pressed && self.radial.is_none() && !space_pan {
+            if let Some(s) = over {
+                let w = self.camera.to_world(origin, s);
+                if let Some(id) = self.board.hit(w, self.tol()) {
+                    self.finish_edit();
+                    if !self.selection.contains(&id) {
+                        self.selection = vec![id];
+                    }
+                    self.selected_wire = None;
+                    self.radial = Some(crate::radial::Radial::new(s));
+                }
+            }
+        }
+        let in_radial = self.radial.is_some();
+        crate::radial::update(self, &ctx);
+        if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Secondary) && !in_radial) {
             self.camera.pan_by(resp.drag_delta());
         }
 

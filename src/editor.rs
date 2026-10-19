@@ -55,6 +55,10 @@ pub struct Editor {
     pub poly: Vec<Pos2>,
     /// The polyline tool draws a smooth curve through its points.
     pub poly_curved: bool,
+    /// The radial menu, while it is open.
+    pub radial: Option<crate::radial::Radial>,
+    /// The radial menu asked for the Properties panel to be shown.
+    pub want_properties: bool,
     /// Calendar: weeks before (negative) or after this one.
     pub cal_week: i64,
     /// Calendar: the chosen days, `YYYY-MM-DD`.
@@ -114,6 +118,8 @@ impl Default for Editor {
             active_layer: 0,
             poly: Vec::new(),
             poly_curved: false,
+            radial: None,
+            want_properties: false,
             cal_week: 0,
             cal_days: Vec::new(),
             day_mode: crate::dates::DayMode::All,
