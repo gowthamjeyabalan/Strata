@@ -834,8 +834,9 @@ impl Editor {
                 self.camera.pan_by(vec2(scroll.x, 0.0));
             }
         }
-        // Holding the right button on an item opens the radial menu for the selection; on empty
-        // board it pans, as the middle button does.
+        // Holding the right button on an item opens the radial menu for the selection. On empty board
+        // it pans, as the middle button does, unless it is held still for a moment (or just clicked):
+        // then the menu opens there.
         let right_pressed = ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
         if right_pressed && self.radial.is_none() && !space_pan {
             if let Some(s) = over {
@@ -846,8 +847,26 @@ impl Editor {
                         self.selection = vec![id];
                     }
                     self.selected_wire = None;
-                    self.radial = Some(crate::radial::Radial::new(s));
+                    self.radial = Some(crate::radial::Radial::new(s, w, true));
+                } else {
+                    self.radial_hold = Some((s, w, std::time::Instant::now()));
                 }
+            }
+        }
+        if let Some((s, w, t)) = self.radial_hold {
+            let down = ui.input(|i| i.pointer.secondary_down());
+            if ptr.is_some_and(|q| q.distance(s) > 6.0) {
+                self.radial_hold = None;
+            } else if !down {
+                self.radial_hold = None;
+                self.finish_edit();
+                self.radial = Some(crate::radial::Radial::new(s, w, false).sticky());
+            } else if t.elapsed().as_secs_f32() >= 0.3 {
+                self.radial_hold = None;
+                self.finish_edit();
+                self.radial = Some(crate::radial::Radial::new(s, w, false));
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(40));
             }
         }
         let in_radial = self.radial.is_some();

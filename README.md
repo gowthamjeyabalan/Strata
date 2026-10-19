@@ -41,7 +41,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Layers you make yourself: name them, reorder them to choose what is in front, and move items between them.
 - Snapping to other items' edges, centres and equal gaps while you move or resize, with guide lines. Hold Alt to skip it.
 - Lock items, change opacity, and add comment threads to any item.
-- A radial menu: hold the right mouse button on an item and move to an action (Properties, Colour, Layer, Arrange, Delete, Duplicate, Lock, Group), then let go. Colour, Layer and Arrange open a second ring to pick from.
+- A radial menu: hold the right mouse button on an item, or hold it still on empty board, and move to an action, then let go. New opens the same items as the `/` list (connected to the selected node), Tools opens every tool, and Layer, Colour and Arrange open a second ring to pick from; Delete, Duplicate, Lock, Group and Properties act straight away.
 - A Graph panel listing connections, and a floating Overview map of the whole board.
 
 **Calendar**
@@ -103,7 +103,7 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
 | History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
 | Tools | The floating Tools card over the board holds select, pan, connect, text, images and the view switches, then Draw, Shapes and Flowchart. Drag it by an empty part; the arrow folds it to its title. |
-| Radial menu | Hold the right button on an item (it is selected if it was not) and move outward to an action; let go to do it. Moving onto Colour, Layer or Arrange opens an outer ring: move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
+| Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto New, Tools, Layer, Colour or Arrange opens an outer ring: move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
 | Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
 | Panels | Calendar, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
 

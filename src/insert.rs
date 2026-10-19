@@ -285,7 +285,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
     }
 }
 
-fn paint_item_icon(painter: &egui::Painter, r: Rect, item: Item, c: Color32, dot: Color32) {
+pub(crate) fn paint_item_icon(painter: &egui::Painter, r: Rect, item: Item, c: Color32, dot: Color32) {
     match item {
         Item::Shape(s) => {
             let r = if matches!(s, Shape::Connector) { Rect::from_center_size(r.center(), vec2(r.height(), r.height()) * 0.85) } else { r.shrink2(vec2(0.0, r.height() * 0.18)) };

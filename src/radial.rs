@@ -1,10 +1,12 @@
-//! The radial menu: hold the right mouse button on a selected item and a ring of actions opens under
-//! the pointer. Move onto one and let go to do it. Some open a second ring further out (the layers,
-//! the colours, front and back); move on to one of those and let go. Letting go in the middle does
-//! nothing. A quick right-click instead leaves the ring open to click in.
+//! The radial menu: hold the right mouse button on an item (or hold it still on empty board) and a
+//! ring of actions opens under the pointer. Move onto one and let go to do it. Some open a second
+//! ring further out (new items, tools, layers, colours, front and back); move on to one of those and
+//! let go. Letting go in the middle does nothing. A quick right-click leaves the ring open to click in.
 
-use crate::board::{self, Id, Ink};
+use crate::board::{self, Id, Ink, Side};
 use crate::editor::Editor;
+use crate::insert::{InsertMenu, Item as NewItem, Place};
+use crate::tools::Tool;
 use crate::theme::{Pal, pal};
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, pos2, vec2};
 use std::f32::consts::{FRAC_PI_2, TAU};
@@ -27,6 +29,10 @@ enum Hot {
 pub struct Radial {
     /// Screen position it opened at.
     center: Pos2,
+    /// The same point on the board, where new items go when it opened on empty board.
+    world: Pos2,
+    /// Opened on an item (new items then go beside the selection) rather than on empty board.
+    on_item: bool,
     opened: Instant,
     /// The wedge whose outer ring is showing.
     sub: Option<usize>,
@@ -37,6 +43,8 @@ pub struct Radial {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Act {
+    New(NewItem),
+    Tool(Tool),
     Properties,
     Layer(Id),
     Ink(Ink),
@@ -51,6 +59,8 @@ enum Act {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Icon {
+    New,
+    Tools,
     Properties,
     Colour,
     Layers,
@@ -70,6 +80,8 @@ enum Look {
     Chip(String),
     Swatch(Ink),
     Icon(Icon),
+    Tool(Tool),
+    New(NewItem),
 }
 
 struct Child {
@@ -89,14 +101,20 @@ struct Item {
 }
 
 impl Radial {
-    pub fn new(center: Pos2) -> Self {
-        Radial { center, opened: Instant::now(), sub: None, hot: Hot::None, sticky: false }
+    pub fn new(center: Pos2, world: Pos2, on_item: bool) -> Self {
+        Radial { center, world, on_item, opened: Instant::now(), sub: None, hot: Hot::None, sticky: false }
+    }
+    /// Open and waiting for a click (after a quick right-click).
+    pub fn sticky(mut self) -> Self {
+        self.sticky = true;
+        self
     }
 }
 
-/// The ring for the current selection, clockwise from the top. Layers sit on the right so their
-/// names run outward without overlapping.
+/// The ring for the current selection, clockwise from the top: making things first, then what to do
+/// with the selection. Layers sit on the right so their names run outward without overlapping.
 fn items(ed: &Editor) -> Vec<Item> {
+    let any = !ed.selection.is_empty();
     let first = ed.selection.first().and_then(|id| ed.board.get(*id));
     let all_locked = !ed.selection.is_empty() && ed.selection.iter().all(|id| ed.is_locked(*id));
     let layer = first.map(|o| o.layer);
@@ -104,41 +122,60 @@ fn items(ed: &Editor) -> Vec<Item> {
     let groups = ed.any_group_selected();
     let sketch = ed.selection.len() == 1 && first.is_some_and(|o| o.is_sketch());
     let one = |label: &str, icon: Icon, act: Act, enabled: bool| Item { label: label.into(), icon, enabled, act: Some(act), children: Vec::new() };
+    let new_label = if ed.selection.len() == 1 { "New, connected" } else { "New" };
     vec![
-        one("Properties", Icon::Properties, Act::Properties, true),
         Item {
-            label: "Colour".into(),
-            icon: Icon::Colour,
+            label: new_label.into(),
+            icon: Icon::New,
             enabled: true,
             act: None,
-            children: board::swatches().into_iter().map(|i| Child { label: if i == Ink::Auto { "Ink (follows the theme)".into() } else { "Colour".into() }, look: Look::Swatch(i), act: Act::Ink(i), current: ink == Some(i) }).collect(),
+            // The same items as the "/" list.
+            children: crate::insert::items().into_iter().map(|(i, name, _)| Child { label: name.into(), look: Look::New(i), act: Act::New(i), current: false }).collect(),
+        },
+        Item {
+            label: "Tools".into(),
+            icon: Icon::Tools,
+            enabled: true,
+            act: None,
+            children: [Tool::Select, Tool::Hand, Tool::Connect, Tool::Text, Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser, Tool::Line, Tool::Arrow, Tool::Polyline, Tool::Rectangle, Tool::Ellipse, Tool::Node]
+                .into_iter()
+                .map(|t| Child { label: format!("{} ({})", t.name(), t.key_name()), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t })
+                .collect(),
         },
         Item {
             label: "Layer".into(),
             icon: Icon::Layers,
-            enabled: true,
+            enabled: any,
             act: None,
             // Front layer first, as in the Layers panel.
             children: ed.board.layers.iter().rev().map(|l| Child { label: format!("Move to {}", l.name), look: Look::Chip(l.name.clone()), act: Act::Layer(l.id), current: layer == Some(l.id) }).collect(),
         },
         Item {
+            label: "Colour".into(),
+            icon: Icon::Colour,
+            enabled: any,
+            act: None,
+            children: board::swatches().into_iter().map(|i| Child { label: if i == Ink::Auto { "Ink (follows the theme)".into() } else { "Colour".into() }, look: Look::Swatch(i), act: Act::Ink(i), current: ink == Some(i) }).collect(),
+        },
+        Item {
             label: "Arrange".into(),
             icon: Icon::Arrange,
-            enabled: true,
+            enabled: any,
             act: None,
             children: vec![
                 Child { label: "Bring to front".into(), look: Look::Icon(Icon::Front), act: Act::Front, current: false },
                 Child { label: "Send to back".into(), look: Look::Icon(Icon::Back), act: Act::Back, current: false },
             ],
         },
-        one("Delete", Icon::Delete, Act::Delete, !all_locked),
-        one("Duplicate", Icon::Duplicate, Act::Duplicate, true),
-        one(if all_locked { "Unlock" } else { "Lock" }, if all_locked { Icon::Unlock } else { Icon::Lock }, Act::Lock, true),
+        one("Delete", Icon::Delete, Act::Delete, any && !all_locked),
+        one("Duplicate", Icon::Duplicate, Act::Duplicate, any),
+        one(if all_locked { "Unlock" } else { "Lock" }, if all_locked { Icon::Unlock } else { Icon::Lock }, Act::Lock, any),
         if groups {
             one(if sketch { "Split sketch" } else { "Ungroup" }, Icon::Group, Act::Ungroup, true)
         } else {
             one("Group", Icon::Group, Act::Group, ed.selection.len() > 1)
         },
+        one("Properties", Icon::Properties, Act::Properties, true),
     ]
 }
 
@@ -160,15 +197,20 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 fn child_rects(painter: &Painter, center: Pos2, i: usize, n: usize, children: &[Child]) -> Vec<Rect> {
     let a = wedge_angle(i, n);
     let chips = children.iter().any(|c| matches!(c.look, Look::Chip(_)));
-    // Pills sit on a ring just outside, stacked 30 px apart; round items on a ring a little further.
-    let (r, step_px) = if chips { (R1 + 16.0, 30.0) } else { (R1 + 26.0, 34.0) };
-    let step = step_px / r;
-    let k = children.len() as f32;
+    // Pills sit on a ring just outside, stacked 30 px apart; round items on a ring a little further,
+    // in rows of at most eight so long lists stay close to the wedge.
+    let per_row = if chips { children.len().max(1) } else { 8 };
+    let rows = children.len().div_ceil(per_row).max(1);
+    let per_row = children.len().div_ceil(rows).max(1);
     children
         .iter()
         .enumerate()
         .map(|(j, c)| {
-            let t = a + (j as f32 - (k - 1.0) * 0.5) * step;
+            let (row, col) = (j / per_row, j % per_row);
+            let in_row = (children.len() - row * per_row).min(per_row) as f32;
+            let (r, step_px) = if chips { (R1 + 16.0, 30.0) } else { (R1 + 26.0 + row as f32 * 36.0, 34.0) };
+            let step = step_px / r;
+            let t = a + (col as f32 - (in_row - 1.0) * 0.5) * step;
             let at = center + vec2(t.cos(), t.sin()) * r;
             match &c.look {
                 Look::Chip(name) => {
@@ -187,9 +229,6 @@ fn child_rects(painter: &Painter, center: Pos2, i: usize, n: usize, children: &[
 /// button is let go (or clicked, if it stayed open).
 pub fn update(ed: &mut Editor, ctx: &egui::Context) {
     let Some(mut r) = ed.radial.take() else { return };
-    if ed.selection.is_empty() {
-        return;
-    }
     let p = pal(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("radial")));
     let list = items(ed);
@@ -213,14 +252,14 @@ pub fn update(ed: &mut Editor, ctx: &egui::Context) {
             // Past the ring: an item of the open outer ring, or else the wedge in that direction.
             let child = r.sub.and_then(|s| {
                 let rects = child_rects(&painter, r.center, s, n, &list[s].children);
-                rects.iter().position(|rc| rc.expand(5.0).contains(q)).or_else(|| {
-                    // Flicking past the end of the outer ring still picks the nearest item on it.
-                    let centers: Vec<f32> = rects.iter().map(|rc| (rc.center() - r.center).angle()).collect();
-                    let span = TAU / n as f32 * 0.5;
-                    if angle_diff(angle, wedge_angle(s, n)).abs() > span.max(centers.iter().map(|c| angle_diff(*c, wedge_angle(s, n)).abs()).fold(0.0, f32::max) + 0.15) {
+                rects.iter().position(|rc| rc.expand(4.0).contains(q)).or_else(|| {
+                    // Between or past the items of the outer ring, the nearest one is picked, as long
+                    // as the pointer is still in that ring's direction.
+                    let span = rects.iter().map(|rc| angle_diff((rc.center() - r.center).angle(), wedge_angle(s, n)).abs()).fold(TAU / n as f32 * 0.5, f32::max) + 0.12;
+                    if angle_diff(angle, wedge_angle(s, n)).abs() > span {
                         return None;
                     }
-                    centers.iter().enumerate().min_by(|a, b| angle_diff(angle, *a.1).abs().total_cmp(&angle_diff(angle, *b.1).abs())).map(|(j, _)| j)
+                    rects.iter().enumerate().min_by(|a, b| a.1.center().distance(q).total_cmp(&b.1.center().distance(q))).map(|(j, _)| j)
                 }).map(|j| (s, j))
             });
             match child {
@@ -260,7 +299,7 @@ pub fn update(ed: &mut Editor, ctx: &egui::Context) {
         act = None;
     }
     if let Some(a) = act {
-        run(ed, a);
+        run(ed, a, &r);
     }
     if !done {
         ed.radial = Some(r);
@@ -276,8 +315,20 @@ fn chosen(r: &Radial, list: &[Item]) -> Option<Act> {
     }
 }
 
-fn run(ed: &mut Editor, a: Act) {
+fn run(ed: &mut Editor, a: Act, r: &Radial) {
     match a {
+        Act::New(item) => {
+            // Like the "/" list: beside the selected node and connected to it, or where the ring was
+            // opened on empty board (connected to the selected node, if one is).
+            let from = (ed.selection.len() == 1).then(|| ed.selection[0]).filter(|id| ed.board.get(*id).is_some());
+            let (from, place) = if r.on_item { (from.map(|id| (id, Some(Side::Right))), Place::RightOf) } else { (from.map(|id| (id, None)), Place::At(r.world)) };
+            ed.insert = Some(InsertMenu { from, place, query: String::new(), index: 0, focus: false });
+            ed.insert_item(item);
+        }
+        Act::Tool(t) => {
+            ed.finish_edit();
+            ed.tool = t;
+        }
         Act::Properties => ed.want_properties = true,
         Act::Layer(id) => {
             ed.mark_changed();
@@ -384,10 +435,19 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
                     painter.circle(rc.center(), 13.0, p.window_fill, Stroke::new(if hot { 2.0 } else { 1.0 }, if hot || ch.current { p.accent } else { p.window_stroke }));
                     painter.circle(rc.center(), 8.0, ink.color(p), Stroke::new(1.0, p.hairline));
                 }
-                Look::Icon(icon) => {
-                    painter.circle(rc.center(), 14.0, if hot { p.accent } else { p.window_fill }, Stroke::new(1.0, if hot { p.accent } else { p.window_stroke }));
+                Look::Icon(_) | Look::Tool(_) | Look::New(_) => {
+                    // Round tiles; the current tool is ringed in blue.
+                    let ring = if hot { p.accent } else if ch.current { p.accent } else { p.window_stroke };
+                    painter.circle(rc.center(), 14.0, if hot { p.accent } else { p.window_fill }, Stroke::new(if ch.current && !hot { 1.5 } else { 1.0 }, ring));
                     let col = if hot { Color32::WHITE } else { p.text };
-                    paint_icon(painter, rc.shrink(5.0), *icon, col, if hot { Color32::WHITE } else { p.accent });
+                    let dot = if hot { Color32::WHITE } else { p.accent };
+                    let ir = rc.shrink(6.0);
+                    match &ch.look {
+                        Look::Icon(icon) => paint_icon(painter, ir, *icon, col, dot),
+                        Look::Tool(t) => crate::tools::paint_icon(painter, ir, *t, col, dot),
+                        Look::New(i) => crate::insert::paint_item_icon(painter, ir, *i, col, dot),
+                        _ => {}
+                    }
                 }
             }
         }
@@ -410,6 +470,18 @@ fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32, dot: Color32) {
         p.rect_stroke(Rect::from_min_max(at(x0, y0), at(x1, y1)), 1.5 * s, st, StrokeKind::Middle);
     };
     match icon {
+        Icon::New => {
+            p.rect_stroke(Rect::from_min_max(at(3.0, 5.0), at(13.0, 15.0)), 2.0 * s, st, StrokeKind::Middle);
+            line(&[(16.5, 2.5), (16.5, 8.5)]);
+            line(&[(13.5, 5.5), (19.5, 5.5)]);
+            p.circle_filled(at(13.0, 10.0), 1.5 * s, dot);
+        }
+        Icon::Tools => {
+            // A pen over a ruler.
+            closed(&[(13.5, 2.5), (17.5, 6.5), (8.0, 16.0), (4.0, 16.0), (4.0, 12.0)]);
+            line(&[(11.0, 5.0), (15.0, 9.0)]);
+            p.circle_filled(at(5.2, 14.8), 1.4 * s, dot);
+        }
         Icon::Properties => {
             for (y, k) in [(5.0, 13.0), (10.0, 7.0), (15.0, 11.0)] {
                 line(&[(3.0, y), (17.0, y)]);

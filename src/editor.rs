@@ -57,6 +57,9 @@ pub struct Editor {
     pub poly_curved: bool,
     /// The radial menu, while it is open.
     pub radial: Option<crate::radial::Radial>,
+    /// Right button held on empty board: where (screen, world) and since when. Held still, it opens
+    /// the radial menu; moved, it pans.
+    pub(crate) radial_hold: Option<(Pos2, Pos2, Instant)>,
     /// The radial menu asked for the Properties panel to be shown.
     pub want_properties: bool,
     /// Calendar: weeks before (negative) or after this one.
@@ -119,6 +122,7 @@ impl Default for Editor {
             poly: Vec::new(),
             poly_curved: false,
             radial: None,
+            radial_hold: None,
             want_properties: false,
             cal_week: 0,
             cal_days: Vec::new(),
