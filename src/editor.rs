@@ -62,6 +62,8 @@ pub struct Editor {
     pub(crate) radial_hold: Option<(Pos2, Pos2, Instant)>,
     /// The radial menu asked for the Properties panel to be shown.
     pub want_properties: bool,
+    /// The Overview window is showing.
+    pub show_overview: bool,
     /// Calendar: weeks before (negative) or after this one.
     pub cal_week: i64,
     /// Calendar: the chosen days, `YYYY-MM-DD`.
@@ -124,6 +126,7 @@ impl Default for Editor {
             radial: None,
             radial_hold: None,
             want_properties: false,
+            show_overview: true,
             cal_week: 0,
             cal_days: Vec::new(),
             day_mode: crate::dates::DayMode::All,

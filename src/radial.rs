@@ -13,9 +13,9 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use std::time::Instant;
 
 /// Radius of the empty middle, where letting go cancels.
-const R0: f32 = 30.0;
+const R0: f32 = 32.0;
 /// Outer edge of the ring.
-const R1: f32 = 92.0;
+const R1: f32 = 100.0;
 /// A right-click shorter than this leaves the ring open to click in.
 const TAP_SECS: f32 = 0.28;
 
@@ -45,6 +45,12 @@ pub struct Radial {
 enum Act {
     New(NewItem),
     Tool(Tool),
+    /// The polyline tool, drawing straight segments or a curve.
+    Poly(bool),
+    Width(f32),
+    Fit,
+    Overview,
+    Snapping,
     Properties,
     Layer(Id),
     Ink(Ink),
@@ -61,6 +67,8 @@ enum Act {
 enum Icon {
     New,
     Tools,
+    Width,
+    View,
     Properties,
     Colour,
     Layers,
@@ -82,6 +90,9 @@ enum Look {
     Icon(Icon),
     Tool(Tool),
     New(NewItem),
+    /// A dot as wide as the line width.
+    Width(f32),
+    Paint(fn(&Painter, Rect, Color32, Color32)),
 }
 
 struct Child {
@@ -118,7 +129,7 @@ fn items(ed: &Editor) -> Vec<Item> {
     let first = ed.selection.first().and_then(|id| ed.board.get(*id));
     let all_locked = !ed.selection.is_empty() && ed.selection.iter().all(|id| ed.is_locked(*id));
     let layer = first.map(|o| o.layer);
-    let ink = first.map(|o| o.style.ink);
+    let ink = Some(first.map(|o| o.style.ink).unwrap_or(ed.style.ink));
     let groups = ed.any_group_selected();
     let sketch = ed.selection.len() == 1 && first.is_some_and(|o| o.is_sketch());
     let one = |label: &str, icon: Icon, act: Act, enabled: bool| Item { label: label.into(), icon, enabled, act: Some(act), children: Vec::new() };
@@ -137,9 +148,27 @@ fn items(ed: &Editor) -> Vec<Item> {
             icon: Icon::Tools,
             enabled: true,
             act: None,
-            children: [Tool::Select, Tool::Hand, Tool::Connect, Tool::Text, Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser, Tool::Line, Tool::Arrow, Tool::Polyline, Tool::Rectangle, Tool::Ellipse, Tool::Node]
+            children: {
+                let mut v: Vec<Child> = [Tool::Select, Tool::Hand, Tool::Connect, Tool::Text, Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser, Tool::Line, Tool::Arrow]
+                    .into_iter()
+                    .map(|t| Child { label: format!("{} ({})", t.name(), t.key_name()), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t })
+                    .collect();
+                let poly = ed.tool == Tool::Polyline;
+                v.push(Child { label: "Polyline (U)".into(), look: Look::Tool(Tool::Polyline), act: Act::Poly(false), current: poly && !ed.poly_curved });
+                v.push(Child { label: "Curve through points".into(), look: Look::Paint(paint_curve_icon), act: Act::Poly(true), current: poly && ed.poly_curved });
+                v.extend([Tool::Rectangle, Tool::Ellipse, Tool::Node].into_iter().map(|t| Child { label: format!("{} ({})", t.name(), t.key_name()), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t }));
+                v
+            },
+        },
+        Item {
+            label: "Width".into(),
+            icon: Icon::Width,
+            enabled: true,
+            act: None,
+            // Line width for what is drawn next, and for the selection.
+            children: [0.5f32, 2.0, 6.0, 16.0, 40.0, 100.0]
                 .into_iter()
-                .map(|t| Child { label: format!("{} ({})", t.name(), t.key_name()), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t })
+                .map(|w| Child { label: format!("Width {w}"), look: Look::Width(w), act: Act::Width(w), current: (ed.tool_width() - w).abs() < 0.01 })
                 .collect(),
         },
         Item {
@@ -153,7 +182,7 @@ fn items(ed: &Editor) -> Vec<Item> {
         Item {
             label: "Colour".into(),
             icon: Icon::Colour,
-            enabled: any,
+            enabled: true,
             act: None,
             children: board::swatches().into_iter().map(|i| Child { label: if i == Ink::Auto { "Ink (follows the theme)".into() } else { "Colour".into() }, look: Look::Swatch(i), act: Act::Ink(i), current: ink == Some(i) }).collect(),
         },
@@ -174,6 +203,17 @@ fn items(ed: &Editor) -> Vec<Item> {
             one(if sketch { "Split sketch" } else { "Ungroup" }, Icon::Group, Act::Ungroup, true)
         } else {
             one("Group", Icon::Group, Act::Group, ed.selection.len() > 1)
+        },
+        Item {
+            label: "View".into(),
+            icon: Icon::View,
+            enabled: true,
+            act: None,
+            children: vec![
+                Child { label: "Zoom to fit (Shift+1)".into(), look: Look::Paint(crate::tools::paint_fit_icon), act: Act::Fit, current: false },
+                Child { label: if ed.show_overview { "Hide the Overview (M)".into() } else { "Show the Overview (M)".into() }, look: Look::Paint(crate::tools::paint_overview_icon), act: Act::Overview, current: ed.show_overview },
+                Child { label: if ed.snapping { "Turn snapping off".into() } else { "Turn snapping on".into() }, look: Look::Paint(crate::tools::paint_snap_icon), act: Act::Snapping, current: ed.snapping },
+            ],
         },
         one("Properties", Icon::Properties, Act::Properties, true),
     ]
@@ -329,6 +369,18 @@ fn run(ed: &mut Editor, a: Act, r: &Radial) {
             ed.finish_edit();
             ed.tool = t;
         }
+        Act::Poly(curved) => {
+            ed.finish_edit();
+            ed.poly_curved = curved;
+            ed.tool = Tool::Polyline;
+        }
+        Act::Width(w) => {
+            ed.set_tool_width(w);
+            crate::panels::apply_to_selection(ed, |s| s.width = w);
+        }
+        Act::Fit => ed.zoom_to_fit(),
+        Act::Overview => ed.show_overview = !ed.show_overview,
+        Act::Snapping => ed.snapping = !ed.snapping,
         Act::Properties => ed.want_properties = true,
         Act::Layer(id) => {
             ed.mark_changed();
@@ -337,7 +389,11 @@ fn run(ed: &mut Editor, a: Act, r: &Radial) {
             let name = ed.board.layers.iter().find(|l| l.id == id).map(|l| l.name.clone()).unwrap_or_default();
             ed.say(format!("Moved to {name}"));
         }
-        Act::Ink(ink) => crate::panels::apply_to_selection(ed, |s| s.ink = ink),
+        Act::Ink(ink) => {
+            // The colour for what is drawn next, and for the selection.
+            ed.style.ink = ink;
+            crate::panels::apply_to_selection(ed, |s| s.ink = ink);
+        }
         Act::Front => ed.reorder_selection(true),
         Act::Back => ed.reorder_selection(false),
         Act::Group => ed.group_selection(),
@@ -435,7 +491,7 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
                     painter.circle(rc.center(), 13.0, p.window_fill, Stroke::new(if hot { 2.0 } else { 1.0 }, if hot || ch.current { p.accent } else { p.window_stroke }));
                     painter.circle(rc.center(), 8.0, ink.color(p), Stroke::new(1.0, p.hairline));
                 }
-                Look::Icon(_) | Look::Tool(_) | Look::New(_) => {
+                Look::Icon(_) | Look::Tool(_) | Look::New(_) | Look::Width(_) | Look::Paint(_) => {
                     // Round tiles; the current tool is ringed in blue.
                     let ring = if hot { p.accent } else if ch.current { p.accent } else { p.window_stroke };
                     painter.circle(rc.center(), 14.0, if hot { p.accent } else { p.window_fill }, Stroke::new(if ch.current && !hot { 1.5 } else { 1.0 }, ring));
@@ -446,6 +502,12 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
                         Look::Icon(icon) => paint_icon(painter, ir, *icon, col, dot),
                         Look::Tool(t) => crate::tools::paint_icon(painter, ir, *t, col, dot),
                         Look::New(i) => crate::insert::paint_item_icon(painter, ir, *i, col, dot),
+                        Look::Paint(f) => f(painter, ir, col, dot),
+                        Look::Width(w) => {
+                            // Dot size grows with the log of the width, as in the old width presets.
+                            let t = (w.ln() - board::MIN_WIDTH.ln()) / (board::MAX_WIDTH.ln() - board::MIN_WIDTH.ln());
+                            painter.circle_filled(ir.center(), 1.0 + t * 7.5, col);
+                        }
                         _ => {}
                     }
                 }
@@ -481,6 +543,27 @@ fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32, dot: Color32) {
             closed(&[(13.5, 2.5), (17.5, 6.5), (8.0, 16.0), (4.0, 16.0), (4.0, 12.0)]);
             line(&[(11.0, 5.0), (15.0, 9.0)]);
             p.circle_filled(at(5.2, 14.8), 1.4 * s, dot);
+        }
+        Icon::Width => {
+            line(&[(3.0, 5.0), (17.0, 5.0)]);
+            p.line_segment([at(3.0, 10.0), at(17.0, 10.0)], Stroke::new(3.0 * s, c));
+            p.line_segment([at(3.0, 15.5), at(17.0, 15.5)], Stroke::new(4.5 * s, c));
+            p.circle_filled(at(17.0, 5.0), 1.3 * s, dot);
+        }
+        Icon::View => {
+            // An eye.
+            let top: Vec<Pos2> = (0..=16).map(|i| {
+                let t = i as f32 / 16.0;
+                at(2.5 + 15.0 * t, 10.0 - 5.5 * (t * std::f32::consts::PI).sin())
+            }).collect();
+            let bottom: Vec<Pos2> = (0..=16).map(|i| {
+                let t = i as f32 / 16.0;
+                at(2.5 + 15.0 * t, 10.0 + 5.5 * (t * std::f32::consts::PI).sin())
+            }).collect();
+            p.add(Shape::line(top, st));
+            p.add(Shape::line(bottom, st));
+            p.circle_stroke(at(10.0, 10.0), 2.6 * s, st);
+            p.circle_filled(at(10.0, 10.0), 1.2 * s, dot);
         }
         Icon::Properties => {
             for (y, k) in [(5.0, 13.0), (10.0, 7.0), (15.0, 11.0)] {
@@ -551,4 +634,17 @@ fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32, dot: Color32) {
             rect_at(6.5, 6.5, 13.5, 13.5);
         }
     }
+}
+
+/// Icon for a curve through points: the polyline icon with a smooth line.
+fn paint_curve_icon(p: &Painter, rect: Rect, c: Color32, dot: Color32) {
+    let s = rect.width().min(rect.height()) / 20.0;
+    let o = rect.center() - vec2(10.0, 10.0) * s;
+    let at = |x: f32, y: f32| o + vec2(x, y) * s;
+    let pts = [at(3.5, 15.5), at(7.5, 6.0), at(12.5, 13.0), at(16.5, 4.5)];
+    p.add(Shape::line(board::catmull_rom(&pts, false), Stroke::new(1.6 * s.max(0.8), c)));
+    for q in &pts[..3] {
+        p.circle_filled(*q, 1.5 * s, c);
+    }
+    p.circle_filled(pts[3], 1.7 * s, dot);
 }

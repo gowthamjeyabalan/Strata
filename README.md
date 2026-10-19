@@ -41,7 +41,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Layers you make yourself: name them, reorder them to choose what is in front, and move items between them.
 - Snapping to other items' edges, centres and equal gaps while you move or resize, with guide lines. Hold Alt to skip it.
 - Lock items, change opacity, and add comment threads to any item.
-- A radial menu: hold the right mouse button on an item, or hold it still on empty board, and move to an action, then let go. New opens the same items as the `/` list (connected to the selected node), Tools opens every tool, and Layer, Colour and Arrange open a second ring to pick from; Delete, Duplicate, Lock, Group and Properties act straight away.
+- A radial menu: hold the right mouse button on an item, or hold it still on empty board, and move to an action, then let go. New opens the same items as the `/` list (connected to the selected node), Tools opens every tool, Width and Colour set the line for the selection and for what you draw next, View has zoom to fit, the Overview and snapping, and Layer and Arrange open a second ring to pick from; Delete, Duplicate, Lock, Group and Properties act straight away. This is where the tools live; there is no toolbar.
 - A Graph panel listing connections, and a floating Overview map of the whole board.
 
 **Calendar**
@@ -102,8 +102,7 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Locking | Locked items can be selected but not moved, edited, erased or deleted. |
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
 | History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
-| Tools | The floating Tools card over the board holds select, pan, connect, text, images and the view switches, then Draw, Shapes and Flowchart. Drag it by an empty part; the arrow folds it to its title. |
-| Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto New, Tools, Layer, Colour or Arrange opens an outer ring: move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
+| Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto New, Tools, Width, Layer, Colour, Arrange or View opens an outer ring: move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
 | Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
 | Panels | Calendar, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
 
@@ -135,7 +134,8 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/snap.rs` | Snapping to edges, centres and equal gaps |
 | `src/insert.rs` | The `/` list |
 | `src/export.rs` | PNG and JPG export (a small software renderer) |
-| `src/panels.rs`, `src/overview.rs` | The Tools card, Properties, Layers, Graph, History and the Overview |
+| `src/panels.rs`, `src/overview.rs` | Properties, Layers, Graph, History and the Overview |
+| `src/radial.rs` | The radial menu: tools, new items and actions on the selection |
 | `src/dates.rs`, `src/calendar.rs` | Dates on items and the Calendar |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 

@@ -992,7 +992,7 @@ impl Editor {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop images here, paste a screenshot, or pick a tool to draw.",
+                "Drop images here or paste a screenshot. Hold the right mouse button for tools and new items.",
                 FontId::proportional(13.0),
                 p.text_secondary,
             );

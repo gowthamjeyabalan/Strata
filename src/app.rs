@@ -78,7 +78,6 @@ pub struct App {
     title: String,
     v_was_down: bool,
     closing: bool,
-    show_overview: bool,
     export: ExportSettings,
     /// Set while the "Save changes?" dialog is showing.
     ask_save: Option<Pending>,
@@ -168,7 +167,6 @@ impl App {
             title: String::new(),
             v_was_down: false,
             closing: false,
-            show_overview: settings.show_overview.unwrap_or(true),
             export: ExportSettings::default(),
             ask_save: None,
             perf: Perf::from_env(),
@@ -357,7 +355,7 @@ impl App {
         }
         if mods.is_none() {
             if ctx.input(|i| i.key_pressed(Key::M)) {
-                self.show_overview = !self.show_overview;
+                ed.show_overview = !ed.show_overview;
             }
             ctx.input(|i| {
                 for t in Tool::ALL {
@@ -461,7 +459,7 @@ impl App {
                     self.ed.reset_zoom();
                 }
                 ui.separator();
-                ui.switch(&mut self.show_overview, "Overview (M)");
+                ui.switch(&mut self.ed.show_overview, "Overview (M)");
                 ui.switch(&mut self.ed.snapping, "Snap to items").on_hover_text("Lines items up with each other's edges, centres and gaps while you move or resize them. Hold Alt to skip it for one drag.");
                 ui.separator();
                 if ui.button("Reset panel layout").clicked() {
@@ -541,7 +539,7 @@ impl TabViewer for Viewer<'_> {
         match tab {
             Tab::Board => self.ed.canvas_ui(ui),
             Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => {
-                ui.label(theme::secondary(ui, "The tools are in the floating Tools window over the board. View > Reset panel layout removes this tab."));
+                ui.label(theme::secondary(ui, "Tools are in the radial menu: hold the right mouse button on the board. View > Reset panel layout removes this tab."));
             }
             Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
             Tab::Properties => panels::properties_ui(ui, self.ed),
@@ -647,14 +645,13 @@ impl App {
                 .show_inside(ui, &mut Viewer { ed: &mut self.ed });
         });
 
-        panels::toolbox(&ctx, &mut self.ed, &mut self.show_overview);
         // The radial menu's Properties brings that panel to the front.
         if std::mem::take(&mut self.ed.want_properties) {
             if let Some(path) = self.dock.find_tab(&Tab::Properties) {
                 let _ = self.dock.set_active_tab(path);
             }
         }
-        overview::show(&ctx, &mut self.ed, &mut self.show_overview);
+        overview::show(&ctx, &mut self.ed);
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);
         export::window(&ctx, &mut self.ed, &mut self.export);
@@ -682,7 +679,7 @@ impl App {
             node_shape: Some(self.ed.node_shape),
             wire_style: Some(self.ed.wire_style),
             brush_widths: Some(self.ed.brush_widths),
-            show_overview: Some(self.show_overview),
+            show_overview: Some(self.ed.show_overview),
             snapping: Some(self.ed.snapping),
             poly_curved: Some(self.ed.poly_curved),
         };

@@ -9,17 +9,18 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, vec2};
 
 const DEFAULT_SIZE: egui::Vec2 = vec2(240.0, 160.0);
 
-/// Show the Overview window over the canvas while `open` is true.
-pub fn show(ctx: &egui::Context, ed: &mut Editor, open: &mut bool) {
+/// Show the Overview window over the canvas while it is switched on.
+pub fn show(ctx: &egui::Context, ed: &mut Editor) {
     let canvas = ed.canvas_rect;
-    if !*open || canvas.width() < 120.0 || canvas.height() < 120.0 {
+    let mut open = ed.show_overview;
+    if !open || canvas.width() < 120.0 || canvas.height() < 120.0 {
         return;
     }
     let p = pal(ctx);
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(8));
     egui::Window::new(theme::semibold("Overview").size(12.0))
         .id(egui::Id::new("overview-window"))
-        .open(open)
+        .open(&mut open)
         .frame(frame)
         .default_pos(canvas.right_bottom() - DEFAULT_SIZE - vec2(28.0, 56.0))
         .default_size(DEFAULT_SIZE)
