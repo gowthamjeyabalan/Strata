@@ -75,6 +75,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, open: &mut bool) {
                 let r = Rect::from_min_max(to_mini(o.rect().min), to_mini(o.rect().max));
                 let ink = o.style.ink.color(p);
                 match &o.kind {
+                    Kind::Group { sketch: true, .. } => {}
                     Kind::Group { .. } => {
                         let c = if o.style.ink == board::Ink::Auto { p.text_secondary } else { ink };
                         painter.rect(r, CornerRadius::same(3), c.gamma_multiply(0.08), Stroke::new(1.0, c.gamma_multiply(0.8)), StrokeKind::Inside);
@@ -88,7 +89,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor, open: &mut bool) {
                         }
                     },
                     Kind::Path { brush, .. } => {
-                        let pts = o.world_points();
+                        let pts = o.line_points();
                         // Thin out long strokes; the map is small.
                         let step = (pts.len() / 48).max(1);
                         let mut mini: Vec<Pos2> = pts.iter().step_by(step).map(|q| to_mini(*q)).collect();

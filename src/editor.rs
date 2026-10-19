@@ -49,6 +49,12 @@ pub struct Editor {
     pub wire_style: WireStyle,
     /// Width of each freehand brush (pen, pencil, marker, highlighter), so each keeps its own size.
     pub brush_widths: [f32; 4],
+    /// New items go on this layer.
+    pub active_layer: Id,
+    /// Corners of the polyline being drawn, in world space.
+    pub poly: Vec<Pos2>,
+    /// The polyline tool draws a smooth curve through its points.
+    pub poly_curved: bool,
 
     /// Object whose label is being typed on the canvas.
     pub editing: Option<Id>,
@@ -96,6 +102,9 @@ impl Default for Editor {
             node_shape: Shape::Process,
             wire_style: WireStyle::Curve,
             brush_widths: Brush::ALL.map(|b| b.default_width()),
+            active_layer: 0,
+            poly: Vec::new(),
+            poly_curved: false,
             editing: None,
             editing_wire: None,
             eyedropper: None,
@@ -304,7 +313,7 @@ impl Editor {
     }
 
     pub fn toggle_collapsed(&mut self, gid: Id) {
-        let Some(Kind::Group { collapsed, .. }) = self.board.get(gid).map(|o| o.kind.clone()) else { return };
+        let Some(Kind::Group { collapsed, sketch: false, .. }) = self.board.get(gid).map(|o| o.kind.clone()) else { return };
         self.board.set_collapsed(gid, !collapsed);
         // Hidden items cannot stay selected.
         let b = &self.board;
@@ -335,7 +344,8 @@ impl Editor {
     // ── selection ──
 
     pub fn select_all(&mut self) {
-        self.selection = self.board.objects.iter().map(|o| o.id).collect();
+        let inner = self.board.sketch_inner();
+        self.selection = self.board.objects.iter().map(|o| o.id).filter(|id| !inner.contains(id)).collect();
         self.selected_wire = None;
     }
 
@@ -399,8 +409,20 @@ impl Editor {
         if self.selection.is_empty() {
             return;
         }
-        let style = Style { ink: Ink::Auto, width: 1.5, fill: true, font_size: 15.0, ..Style::default() };
         let ids = self.selection.clone();
+        // Strokes alone join into one sketch, with no frame around them.
+        let strokes = ids.iter().all(|id| self.board.get(*id).is_some_and(|o| matches!(o.kind, Kind::Path { .. }) || o.is_sketch()));
+        if strokes && ids.len() > 1 {
+            if let Some(g) = self.board.sketch(&ids, Style::default()) {
+                self.mark_changed();
+                let n = self.board.members(g).len();
+                self.selection = vec![g];
+                self.selected_wire = None;
+                self.say(format!("Joined {} into one sketch. Ctrl+Shift+G splits it again.", plural(n, "stroke", "strokes")));
+            }
+            return;
+        }
+        let style = Style { ink: Ink::Auto, width: 1.5, fill: true, font_size: 15.0, ..Style::default() };
         if let Some(g) = self.board.group(&ids, style) {
             self.mark_changed();
             let n = self.board.members(g).len();
@@ -526,6 +548,8 @@ impl Editor {
                     *image = *x;
                 }
             }
+            // Pasted items land on the current layer.
+            n.layer = self.active_layer;
             map.insert(o.id, n.id);
             new_ids.push(n.id);
             self.board.objects.push(n);

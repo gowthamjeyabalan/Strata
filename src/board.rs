@@ -294,6 +294,12 @@ pub enum Kind {
         arrow: bool,
         #[serde(default)]
         brush: Brush,
+        /// Polylines: the last point joins back to the first.
+        #[serde(default)]
+        closed: bool,
+        /// Polylines: a smooth curve through the points instead of straight segments.
+        #[serde(default)]
+        curved: bool,
     },
     Shape { shape: Shape },
     Text,
@@ -303,6 +309,9 @@ pub enum Kind {
         members: Vec<Id>,
         #[serde(default)]
         collapsed: bool,
+        /// A sketch: strokes joined into one item, with no frame or name.
+        #[serde(default)]
+        sketch: bool,
     },
 }
 
@@ -325,9 +334,13 @@ impl Kind {
     pub fn name(&self) -> &'static str {
         match self {
             Kind::Image { .. } => "Image",
-            Kind::Path { points, arrow, brush, .. } => {
+            Kind::Path { points, arrow, brush, closed, curved, .. } => {
                 if *arrow {
                     "Arrow"
+                } else if *closed {
+                    if *curved { "Closed curve" } else { "Polygon" }
+                } else if *curved {
+                    "Curve"
                 } else if points.len() == 2 {
                     "Line"
                 } else {
@@ -341,6 +354,7 @@ impl Kind {
             }
             Kind::Shape { shape } => shape.name(),
             Kind::Text => "Text",
+            Kind::Group { sketch: true, .. } => "Sketch",
             Kind::Group { .. } => "Group",
         }
     }
@@ -399,11 +413,14 @@ pub struct Object {
     pub opacity: f32,
     #[serde(default)]
     pub comments: Vec<Comment>,
+    /// The layer it is on. 0 until it is placed on one.
+    #[serde(default)]
+    pub layer: Id,
 }
 
 impl Object {
     pub fn new(id: Id, rect: Rect, kind: Kind, label: String, style: Style) -> Self {
-        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new() };
+        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0 };
         o.set_rect(rect);
         o
     }
@@ -430,6 +447,24 @@ impl Object {
     pub fn is_group(&self) -> bool {
         matches!(self.kind, Kind::Group { .. })
     }
+    pub fn is_sketch(&self) -> bool {
+        matches!(self.kind, Kind::Group { sketch: true, .. })
+    }
+    /// The line as drawn, in world space: curved polylines are sampled, closed ones end where they start.
+    pub fn line_points(&self) -> Vec<Pos2> {
+        let pts = self.world_points();
+        match &self.kind {
+            Kind::Path { closed, curved: true, .. } => catmull_rom(&pts, *closed),
+            Kind::Path { closed: true, .. } => {
+                let mut out = pts;
+                if let Some(f) = out.first().copied() {
+                    out.push(f);
+                }
+                out
+            }
+            _ => pts,
+        }
+    }
     /// Path points in world space.
     pub fn world_points(&self) -> Vec<Pos2> {
         let Kind::Path { points, base, .. } = &self.kind else { return Vec::new() };
@@ -441,11 +476,13 @@ impl Object {
     /// Does a world point hit this object? `tol` is in world units.
     pub fn hit(&self, p: Pos2, tol: f32) -> bool {
         match &self.kind {
-            Kind::Path { .. } => {
-                let pts = self.world_points();
+            Kind::Path { closed, .. } => {
+                let pts = self.line_points();
                 let t = tol + self.style.width * 0.5;
-                pts.windows(2).any(|s| dist_to_segment(p, s[0], s[1]) <= t) || (pts.len() == 1 && pts[0].distance(p) <= t)
+                pts.windows(2).any(|s| dist_to_segment(p, s[0], s[1]) <= t) || (pts.len() == 1 && pts[0].distance(p) <= t) || (*closed && self.style.fill && inside(&pts, p))
             }
+            // A sketch is hit through its strokes, never its empty box.
+            Kind::Group { sketch: true, .. } => false,
             _ => self.rect().expand(tol).contains(p),
         }
     }
@@ -514,6 +551,15 @@ pub struct Board {
     pub wires: Vec<Wire>,
     pub images: BTreeMap<Id, ImageAsset>,
     pub next_id: Id,
+    /// Back to front. Every object is on one; their order decides what is in front.
+    #[serde(default)]
+    pub layers: Vec<Layer>,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: Id,
+    pub name: String,
 }
 
 impl Board {
@@ -538,7 +584,8 @@ impl Board {
         self.objects.push(Object::new(id, rect, kind, String::new(), style));
         id
     }
-    /// Topmost visible object under a world point. Groups sit behind their members, so members win.
+    /// Topmost visible object under a world point. Groups sit behind their members, so members win;
+    /// a stroke inside a sketch gives the sketch.
     pub fn hit(&self, p: Pos2, tol: f32) -> Option<Id> {
         // Work out what is hidden only if something is actually under the point.
         let mut hidden: Option<std::collections::HashSet<Id>> = None;
@@ -546,7 +593,58 @@ impl Board {
             .iter()
             .rev()
             .find(|o| o.hit(p, tol) && !hidden.get_or_insert_with(|| self.hidden_set()).contains(&o.id))
-            .map(|o| o.id)
+            .map(|o| self.outer_sketch(o.id))
+    }
+
+    /// The outermost sketch around `id`, or `id` itself.
+    pub fn outer_sketch(&self, id: Id) -> Id {
+        let mut out = id;
+        while let Some(p) = self.parent(out).filter(|p| self.get(*p).is_some_and(|o| o.is_sketch())) {
+            out = p;
+        }
+        out
+    }
+
+    /// Strokes inside sketches. They are drawn, but are picked, connected and listed as their sketch.
+    pub fn sketch_inner(&self) -> std::collections::HashSet<Id> {
+        if !self.objects.iter().any(|o| o.is_sketch()) {
+            return Default::default();
+        }
+        let members: Vec<Id> = self.objects.iter().filter(|o| o.is_sketch()).flat_map(|o| self.members(o.id)).collect();
+        self.with_descendants(&members).into_iter().collect()
+    }
+
+    // ── layers ──
+
+    /// Make sure there is a layer, put objects that are on none onto `active`, and keep the object list
+    /// in layer order (back layer first). Cheap when nothing needs doing.
+    pub fn fix_layers(&mut self, active: &mut Id) {
+        if self.layers.is_empty() {
+            let id = self.new_id();
+            self.layers.push(Layer { id, name: "Layer 1".into() });
+        }
+        if !self.layers.iter().any(|l| l.id == *active) {
+            *active = self.layers[self.layers.len() - 1].id;
+        }
+        let rank: std::collections::HashMap<Id, usize> = self.layers.iter().enumerate().map(|(i, l)| (l.id, i)).collect();
+        for o in &mut self.objects {
+            if !rank.contains_key(&o.layer) {
+                o.layer = *active;
+            }
+        }
+        if !self.objects.windows(2).all(|w| rank[&w[0].layer] <= rank[&w[1].layer]) {
+            self.objects.sort_by_key(|o| rank[&o.layer]);
+        }
+    }
+
+    /// Put objects (and everything inside groups among them) on a layer.
+    pub fn set_layer(&mut self, ids: &[Id], layer: Id) {
+        let ids = self.with_descendants(ids);
+        for o in &mut self.objects {
+            if ids.contains(&o.id) {
+                o.layer = layer;
+            }
+        }
     }
 
     /// Index and collapsed-group stand-ins, built once so a whole frame of drawing can look items up
@@ -560,7 +658,7 @@ impl Board {
                 proxy.insert(d, stand_in);
             }
         }
-        Lookup { index, proxy }
+        Lookup { index, proxy, inner: self.sketch_inner() }
     }
 
     /// Is `id` inside a collapsed group (at any depth)?
@@ -652,11 +750,18 @@ impl Board {
             let mut changed = false;
             let rects: std::collections::HashMap<Id, Rect> = self.objects.iter().map(|o| (o.id, o.rect())).collect();
             for k in 0..self.objects.len() {
-                let Kind::Group { members, collapsed } = &self.objects[k].kind else { continue };
+                let Kind::Group { members, collapsed, sketch } = &self.objects[k].kind else { continue };
                 let Some(b) = members.iter().filter_map(|m| rects.get(m).copied()).reduce(|a, b| a.union(b)) else { continue };
                 let min = b.min - vec2(GROUP_PAD, GROUP_PAD_TOP);
-                // A collapsed group keeps its top-left corner and shrinks to a compact node.
-                let r = if *collapsed { Rect::from_min_size(min, COLLAPSED_SIZE) } else { Rect::from_min_max(min, b.max + vec2(GROUP_PAD, GROUP_PAD)) };
+                // A collapsed group keeps its top-left corner and shrinks to a compact node. A sketch has
+                // no frame, so it fits its strokes exactly.
+                let r = if *sketch {
+                    b
+                } else if *collapsed {
+                    Rect::from_min_size(min, COLLAPSED_SIZE)
+                } else {
+                    Rect::from_min_max(min, b.max + vec2(GROUP_PAD, GROUP_PAD))
+                };
                 if (r.min - self.objects[k].rect().min).length() > 0.01 || (r.size() - self.objects[k].rect().size()).length() > 0.01 {
                     self.objects[k].set_rect(r);
                     changed = true;
@@ -671,6 +776,23 @@ impl Board {
     /// Put `ids` into a new group. Objects already in a group leave it; if they all came from the same
     /// group, the new group goes inside that one. Returns the new group's id.
     pub fn group(&mut self, ids: &[Id], style: Style) -> Option<Id> {
+        self.group_as(ids, style, false)
+    }
+
+    /// Join strokes into one sketch. Sketches among them are merged in rather than nested.
+    pub fn sketch(&mut self, ids: &[Id], style: Style) -> Option<Id> {
+        let mut flat = Vec::new();
+        for id in ids {
+            if self.get(*id).is_some_and(|o| o.is_sketch()) {
+                flat.extend(self.ungroup(*id));
+            } else {
+                flat.push(*id);
+            }
+        }
+        self.group_as(&flat, style, true)
+    }
+
+    fn group_as(&mut self, ids: &[Id], style: Style, sketch: bool) -> Option<Id> {
         // Skip anything already inside another selected group.
         let inner: Vec<Id> = ids.iter().flat_map(|id| self.with_descendants(&[*id]).into_iter().skip(1)).collect();
         let ids: Vec<Id> = ids.iter().copied().filter(|id| !inner.contains(id) && self.get(*id).is_some()).collect();
@@ -686,7 +808,9 @@ impl Board {
         }
         let gid = self.new_id();
         let at = self.objects.iter().position(|o| ids.contains(&o.id)).unwrap_or(0);
-        let g = Object::new(gid, Rect::ZERO, Kind::Group { members: ids, collapsed: false }, "Group".into(), style);
+        let layer = self.objects.get(at).map(|o| o.layer).unwrap_or(0);
+        let mut g = Object::new(gid, Rect::ZERO, Kind::Group { members: ids, collapsed: false, sketch }, if sketch { String::new() } else { "Group".into() }, style);
+        g.layer = layer;
         self.objects.insert(at, g);
         if let Some(p) = common {
             if let Some(Object { kind: Kind::Group { members, .. }, .. }) = self.get_mut(p) {
@@ -800,6 +924,8 @@ pub struct Lookup {
     index: std::collections::HashMap<Id, usize>,
     /// Items inside collapsed groups, and the group that stands in for each.
     proxy: std::collections::HashMap<Id, Id>,
+    /// Strokes inside sketches: drawn, but without ports or controls of their own.
+    inner: std::collections::HashSet<Id>,
 }
 
 impl Lookup {
@@ -808,6 +934,9 @@ impl Lookup {
     }
     pub fn hidden(&self, id: Id) -> bool {
         self.proxy.contains_key(&id)
+    }
+    pub fn in_sketch(&self, id: Id) -> bool {
+        self.inner.contains(&id)
     }
     pub fn proxy(&self, id: Id) -> Id {
         self.proxy.get(&id).copied().unwrap_or(id)
@@ -915,6 +1044,46 @@ pub fn midpoint(pts: &[Pos2]) -> Pos2 {
     pts.first().copied().unwrap_or_default()
 }
 
+/// A smooth curve through every point (Catmull-Rom), as a polyline.
+pub fn catmull_rom(pts: &[Pos2], closed: bool) -> Vec<Pos2> {
+    let n = pts.len();
+    if n < 3 {
+        let mut v = pts.to_vec();
+        if closed && n > 0 {
+            v.push(pts[0]);
+        }
+        return v;
+    }
+    let at = |i: isize| -> Pos2 { if closed { pts[i.rem_euclid(n as isize) as usize] } else { pts[i.clamp(0, n as isize - 1) as usize] } };
+    let segs = if closed { n } else { n - 1 };
+    let mut out = Vec::with_capacity(segs * 12 + 1);
+    for i in 0..segs as isize {
+        let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+        let steps = ((p1.distance(p2) / 6.0).ceil() as usize).clamp(4, 32);
+        for k in 0..steps {
+            let t = k as f32 / steps as f32;
+            let (t2, t3) = (t * t, t * t * t);
+            let f = |a: f32, b: f32, c: f32, d: f32| 0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (3.0 * b - a - 3.0 * c + d) * t3);
+            out.push(pos2(f(p0.x, p1.x, p2.x, p3.x), f(p0.y, p1.y, p2.y, p3.y)));
+        }
+    }
+    out.push(if closed { pts[0] } else { pts[n - 1] });
+    out
+}
+
+/// Is `p` inside the polygon `pts` (even-odd)?
+pub fn inside(pts: &[Pos2], p: Pos2) -> bool {
+    let n = pts.len();
+    let mut c = false;
+    for i in 0..n {
+        let (a, b) = (pts[i], pts[(i + n - 1) % n]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            c = !c;
+        }
+    }
+    c
+}
+
 pub fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
     let len2 = ab.length_sq();
@@ -994,7 +1163,7 @@ mod tests {
         let mut b = Board::default();
         let id = b.add(
             Rect::from_min_size(Pos2::ZERO, vec2(10.0, 10.0)),
-            Kind::Path { points: vec![[0.0, 0.0], [10.0, 10.0]], base: [10.0, 10.0], arrow: false, brush: Brush::Pen },
+            Kind::Path { points: vec![[0.0, 0.0], [10.0, 10.0]], base: [10.0, 10.0], arrow: false, brush: Brush::Pen, closed: false, curved: false },
             Style::default(),
         );
         b.get_mut(id).unwrap().set_rect(Rect::from_min_size(pos2(5.0, 5.0), vec2(20.0, 20.0)));

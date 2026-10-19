@@ -17,6 +17,8 @@ const MAX_ZOOM: f32 = 16.0;
 const HIT_PX: f32 = 6.0;
 const PORT_PX: f32 = 4.5;
 const HANDLE_PX: f32 = 9.0;
+/// How near the first point of a polyline a click closes it, in screen pixels.
+const CLOSE_PX: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Camera {
@@ -175,11 +177,12 @@ impl Editor {
     fn port_hit(&self, w: Pos2, except: Option<Id>) -> Option<(Id, Side)> {
         let r = (PORT_PX + 5.0) / self.camera.zoom;
         let hidden = self.board.hidden_set();
+        let inner = self.board.sketch_inner();
         self.board
             .objects
             .iter()
             .rev()
-            .filter(|o| Some(o.id) != except && !hidden.contains(&o.id))
+            .filter(|o| Some(o.id) != except && !hidden.contains(&o.id) && !inner.contains(&o.id))
             .find_map(|o| Side::ALL.into_iter().find(|s| o.port(*s).distance(w) <= r).map(|s| (o.id, s)))
     }
 
@@ -200,7 +203,7 @@ impl Editor {
     }
 
     fn resizable(o: &Object) -> bool {
-        !o.locked && !matches!(o.kind, Kind::Text | Kind::Group { .. })
+        !o.locked && !matches!(o.kind, Kind::Text | Kind::Group { sketch: false, .. })
     }
 
     /// The single selected shape whose corners can be rounded, with its corner radius in world units.
@@ -250,13 +253,14 @@ impl Editor {
     /// A click on a comment bubble or a collapse arrow (screen position).
     fn control_hit(&self, s: Pos2) -> Option<Control> {
         let hidden = self.board.hidden_set();
+        let inner = self.board.sketch_inner();
         let hovered = self.hover_world.and_then(|w| self.board.hit(w, self.tol()));
-        for o in self.board.objects.iter().rev().filter(|o| !hidden.contains(&o.id)) {
+        for o in self.board.objects.iter().rev().filter(|o| !hidden.contains(&o.id) && !inner.contains(&o.id)) {
             if self.shows_comment_icon(o, hovered) && self.comment_rect(o).expand(2.0).contains(s) {
                 return Some(Control::Comments(o.id));
             }
         }
-        for o in self.board.objects.iter().rev().filter(|o| o.is_group() && !hidden.contains(&o.id)) {
+        for o in self.board.objects.iter().rev().filter(|o| o.is_group() && !o.is_sketch() && !hidden.contains(&o.id)) {
             if self.chevron_rect(o).expand(3.0).contains(s) {
                 return Some(Control::Collapse(o.id));
             }
@@ -405,7 +409,57 @@ impl Editor {
         let b = Rect::from_points(&points);
         let local = points.iter().map(|p| [p.x - b.min.x, p.y - b.min.y]).collect();
         self.mark_changed();
-        self.board.add(b, Kind::Path { points: local, base: [b.width(), b.height()], arrow, brush: brush.unwrap_or_default() }, style);
+        self.board.add(b, Kind::Path { points: local, base: [b.width(), b.height()], arrow, brush: brush.unwrap_or_default(), closed: false, curved: false }, style);
+    }
+
+    // ── polyline: click to add corners, double-click or Enter to finish, click the first point to close ──
+
+    fn poly_click(&mut self, w: Pos2, mods: Modifiers) {
+        let w = match self.poly.last() {
+            Some(last) if mods.shift => snap45(*last, w),
+            _ => w,
+        };
+        if self.poly.len() >= 3 && self.poly[0].distance(w) * self.camera.zoom <= CLOSE_PX {
+            self.finish_poly(true);
+        } else {
+            self.poly.push(w);
+        }
+    }
+
+    /// Turn the points clicked so far into a line (a shape when `closed`).
+    pub fn finish_poly(&mut self, closed: bool) {
+        let mut pts = std::mem::take(&mut self.poly);
+        let z = self.camera.zoom;
+        // A double-click adds the same point twice.
+        pts.dedup_by(|b, a| a.distance(*b) * z < 2.0);
+        if pts.len() < 2 || (closed && pts.len() < 3) {
+            return;
+        }
+        let b = Rect::from_points(&pts);
+        let local = pts.iter().map(|p| [p.x - b.min.x, p.y - b.min.y]).collect();
+        self.mark_changed();
+        let kind = Kind::Path { points: local, base: [b.width(), b.height()], arrow: false, brush: Brush::Pen, closed, curved: self.poly_curved };
+        let id = self.board.add(b, kind, self.style);
+        self.selection = vec![id];
+        self.selected_wire = None;
+    }
+
+    /// Enter finishes the polyline, Esc drops it, Backspace takes back the last point. Returns true if
+    /// a key was used.
+    pub fn poly_keys(&mut self, ctx: &egui::Context) -> bool {
+        if self.tool != Tool::Polyline || self.poly.is_empty() {
+            return false;
+        }
+        ctx.input_mut(|i| {
+            if i.consume_key(Modifiers::NONE, Key::Enter) {
+                self.finish_poly(false);
+            } else if i.consume_key(Modifiers::NONE, Key::Escape) {
+                self.poly.clear();
+            } else if i.consume_key(Modifiers::NONE, Key::Backspace) || i.consume_key(Modifiers::NONE, Key::Delete) {
+                self.poly.pop();
+            }
+        });
+        true
     }
 
     fn begin_drag(&mut self, w: Pos2, mods: Modifiers, pan: bool) {
@@ -456,6 +510,7 @@ impl Editor {
             Tool::Pen | Tool::Pencil | Tool::Marker | Tool::Highlighter => Drag::Draw { points: vec![w] },
             Tool::Eraser => Drag::Erase { erased: self.erase_at(w) },
             Tool::Line | Tool::Arrow => Drag::Segment { start: w, end: w, arrow: self.tool == Tool::Arrow },
+            Tool::Polyline => Drag::None,
             Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text => Drag::Box { start: w, end: w },
             Tool::Connect => match self.port_hit(w, None) {
                 Some((id, side)) => Drag::Wire { from: id, from_side: Some(side), end: w },
@@ -552,8 +607,20 @@ impl Editor {
                     r = snapped;
                     self.guides = guides;
                 }
-                if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == *id) {
+                let id = *id;
+                let before = self.board.get(id).map(|o| o.rect());
+                if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == id) {
                     o.set_rect(r);
+                }
+                // A sketch's strokes scale with it.
+                if let Some(old) = before.filter(|_| self.board.get(id).is_some_and(|o| o.is_sketch())) {
+                    let inner = self.board.with_descendants(&[id]);
+                    let (sx, sy) = (r.width() / old.width().max(1e-3), r.height() / old.height().max(1e-3));
+                    let map = |q: Pos2| pos2(r.min.x + (q.x - old.min.x) * sx, r.min.y + (q.y - old.min.y) * sy);
+                    for o in self.board.objects.iter_mut().filter(|o| o.id != id && inner.contains(&o.id)) {
+                        let m = o.rect();
+                        o.set_rect(Rect::from_min_max(map(m.min), map(m.max)));
+                    }
                 }
             }
             Drag::Radius { id } => {
@@ -595,13 +662,14 @@ impl Editor {
             Drag::Marquee { start, end, add } => {
                 let r = Rect::from_two_pos(start, end);
                 let hidden = self.board.hidden_set();
-                // Groups need to be fully inside the box; anything else only has to touch it.
+                let inner = self.board.sketch_inner();
+                // Groups need to be fully inside the box; anything else (a sketch too) only has to touch it.
                 let hits: Vec<Id> = self
                     .board
                     .objects
                     .iter()
-                    .filter(|o| !hidden.contains(&o.id))
-                    .filter(|o| if o.is_group() { r.contains_rect(o.rect()) } else { r.intersects(o.rect().expand(0.5)) })
+                    .filter(|o| !hidden.contains(&o.id) && !inner.contains(&o.id))
+                    .filter(|o| if o.is_group() && !o.is_sketch() { r.contains_rect(o.rect()) } else { r.intersects(o.rect().expand(0.5)) })
                     .map(|o| o.id)
                     .collect();
                 if !add {
@@ -696,11 +764,16 @@ impl Editor {
                 let size = self.tool_shape().map(|s| s.default_size()).unwrap_or(vec2(140.0, 90.0));
                 self.create_box(Rect::from_center_size(w, size));
             }
+            Tool::Polyline => self.poly_click(w, mods),
             Tool::Hand | Tool::Line | Tool::Arrow => {}
         }
     }
 
     fn double_click(&mut self, w: Pos2) {
+        if self.tool == Tool::Polyline {
+            self.finish_poly(false);
+            return;
+        }
         if self.tool != Tool::Select {
             return;
         }
@@ -832,6 +905,9 @@ impl Editor {
 
         // Groups follow their members.
         self.board.update_groups();
+        if self.tool != Tool::Polyline {
+            self.poly.clear();
+        }
 
         // ── cursor ──
         if let Some(w) = self.hover_world {
@@ -952,12 +1028,12 @@ impl Editor {
     /// Comment bubbles, collapse arrows and lock marks.
     fn draw_controls(&self, painter: &Painter, p: &Pal, hovered: Option<Id>, look: &board::Lookup) {
         let ptr = painter.ctx().input(|i| i.pointer.hover_pos());
-        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id)) {
+        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id) && !look.in_sketch(o.id)) {
             let r = self.camera.rect_to_screen(self.canvas_rect.min, o.rect());
             if !painter.clip_rect().intersects(r.expand(30.0)) {
                 continue;
             }
-            if o.is_group() {
+            if o.is_group() && !o.is_sketch() {
                 let c = self.chevron_rect(o);
                 let collapsed = matches!(o.kind, Kind::Group { collapsed: true, .. });
                 let color = if ptr.is_some_and(|q| c.expand(3.0).contains(q)) { p.accent } else { group_color(o, p).gamma_multiply(o.opacity) };
@@ -1053,8 +1129,14 @@ impl Editor {
                 }
                 self.draw_caption(painter, r, o, fade(p.text_secondary), editing);
             }
-            Kind::Path { arrow, brush, .. } => {
-                let pts: Vec<Pos2> = o.world_points().into_iter().map(|q| self.camera.to_screen(origin, q)).collect();
+            Kind::Path { arrow, brush, closed, .. } => {
+                let pts: Vec<Pos2> = o.line_points().into_iter().map(|q| self.camera.to_screen(origin, q)).collect();
+                if *closed && o.style.fill {
+                    let (look, _) = look_of(o, p, z, fade);
+                    if let shapes::Fill::Solid(c) | shapes::Fill::Gradient(c, _) = look.fill {
+                        shapes::fill_polygon(painter, &pts, c);
+                    }
+                }
                 let line = Stroke::new(stroke.width, ink.gamma_multiply(brush.alpha()));
                 if o.style.dash == board::Dash::Solid {
                     paint_stroke(painter, &pts, line, *brush);
@@ -1091,7 +1173,9 @@ impl Editor {
                     return Some(h);
                 }
             }
-            Kind::Group { members, collapsed } => {
+            // A sketch's strokes draw themselves; it only adds its caption.
+            Kind::Group { sketch: true, .. } => self.draw_caption(painter, r, o, fade(p.text_secondary), editing),
+            Kind::Group { members, collapsed, .. } => {
                 let c = fade(group_color(o, p));
                 let gs = Stroke::new((o.style.width * z * 0.75).clamp(1.0, 4.0), c.gamma_multiply(0.85));
                 let radius = CornerRadius::same((12.0 * z).clamp(2.0, 30.0) as u8);
@@ -1148,7 +1232,7 @@ impl Editor {
             .collect();
         let selected: std::collections::HashSet<Id> = self.selection.iter().copied().collect();
         let clip = painter.clip_rect().expand(PORT_PX + 2.0);
-        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id)) {
+        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id) && !look.in_sketch(o.id)) {
             if !clip.intersects(self.camera.rect_to_screen(origin, o.rect())) {
                 continue;
             }
@@ -1213,6 +1297,21 @@ impl Editor {
                     painter.extend(egui::Shape::dashed_line(&pts.into_iter().map(to_s).collect::<Vec<_>>(), Stroke::new(2.0, p.accent), 6.0, 4.0));
                     painter.circle_filled(to_s(at), 4.0, p.accent);
                 }
+            }
+        }
+        if self.tool == Tool::Polyline && !self.poly.is_empty() {
+            let mut pts = self.poly.clone();
+            let mods = painter.ctx().input(|i| i.modifiers);
+            let closing = self.hover_world.is_some_and(|h| pts.len() >= 3 && pts[0].distance(h) * z <= CLOSE_PX);
+            if let Some(h) = self.hover_world.filter(|_| !closing) {
+                pts.push(if mods.shift { snap45(pts[pts.len() - 1], h) } else { h });
+            }
+            let line = if self.poly_curved { board::catmull_rom(&pts, closing) } else if closing { pts.iter().copied().chain([pts[0]]).collect() } else { pts.clone() };
+            let s: Vec<Pos2> = line.into_iter().map(to_s).collect();
+            paint_stroke(painter, &s, stroke, Brush::Pen);
+            for (k, q) in self.poly.iter().enumerate() {
+                let r = if k == 0 && closing { 6.0 } else { 3.5 };
+                painter.circle(to_s(*q), r, p.canvas, Stroke::new(1.5, p.accent));
             }
         }
         match &self.drag {
@@ -1291,7 +1390,7 @@ impl Editor {
             let (area, font, color, center) = match &o.kind {
                 Kind::Text => (Rect::from_min_size(r.min, vec2(r.width().max(40.0), r.height().max(20.0))), FontId::proportional(size), ink, false),
                 Kind::Shape { .. } => (r.shrink2(vec2(8.0 * z, 4.0 * z)), FontId::proportional(size), p.text, true),
-                Kind::Group { .. } => {
+                Kind::Group { sketch: false, .. } => {
                     let pos = group_name_pos(r, z, size);
                     (Rect::from_min_size(pos, vec2((r.width() - 24.0 * z).max(80.0), size * 1.3)), FontId::new(size, theme::semibold_family()), group_color(o, p), false)
                 }

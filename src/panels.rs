@@ -1,4 +1,4 @@
-//! Dockable panels: Tools, Properties, Layers and Graph.
+//! The tool strip and the dockable panels: Draw, Shapes, Flowchart, Properties, Layers and Graph.
 
 use crate::board::{self, Dash, Id, Ink, Kind, Shape, Style, WireStyle};
 use crate::canvas::paint_shape;
@@ -116,21 +116,77 @@ fn width_control(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
-pub fn tools_ui(ui: &mut Ui, ed: &mut Editor) {
-    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+fn pick_tool(ed: &mut Editor, t: Tool) {
+    ed.finish_edit();
+    ed.tool = t;
+}
 
-    // Flowchart tools are pinned to the bottom of the panel.
-    egui::Panel::bottom("tools-flowchart").frame(egui::Frame::NONE).resizable(false).show(ui, |ui| {
+/// The fixed strip at the left edge: picking, panning and the tools every kind of work uses, then
+/// view switches.
+pub fn tool_strip(ui: &mut Ui, ed: &mut Editor, show_overview: &mut bool) {
+    ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+    ui.add_space(4.0);
+    for t in [Tool::Select, Tool::Hand, Tool::Connect, Tool::Text] {
+        let tip = format!("{} ({})", t.name(), t.key_name());
+        if icon_button(ui, TOOL_PX, ed.tool == t, &tip, |p, r, c, d| tools::paint_icon(p, r, t, c, d)).clicked() {
+            pick_tool(ed, t);
+        }
+    }
+    if icon_button(ui, TOOL_PX, false, "Insert image (Ctrl+I)", tools::paint_image_icon).clicked() {
+        ed.pick_images();
+    }
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+    if icon_button(ui, TOOL_PX, false, "Zoom to fit (Shift+1)", tools::paint_fit_icon).clicked() {
+        ed.zoom_to_fit();
+    }
+    if icon_button(ui, TOOL_PX, *show_overview, "Overview (M)", tools::paint_overview_icon).clicked() {
+        *show_overview = !*show_overview;
+    }
+    let snap_tip = if ed.snapping { "Snapping is on: items line up with each other. Alt skips it for one drag." } else { "Snapping is off" };
+    if icon_button(ui, TOOL_PX, ed.snapping, snap_tip, tools::paint_snap_icon).clicked() {
+        ed.snapping = !ed.snapping;
+    }
+}
+
+/// Freehand drawing: the brushes and eraser, width and colour.
+pub fn draw_ui(ui: &mut Ui, ed: &mut Editor) {
+    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        theme::heading(ui, "FLOWCHART");
+        tool_grid(ui, ed, &[Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser]);
         ui.add_space(4.0);
+        width_control(ui, ed);
+        ui.add_space(2.0);
+        if let Some(ink) = ink_row(ui, ed.style.ink) {
+            ed.style.ink = ink;
+            apply_to_selection(ed, |s| s.ink = ink);
+        }
+    });
+}
+
+/// Lines and plain shapes.
+pub fn shapes_ui(ui: &mut Ui, ed: &mut Editor) {
+    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        tool_grid(ui, ed, &[Tool::Line, Tool::Arrow, Tool::Polyline, Tool::Rectangle, Tool::Ellipse]);
+        ui.add_space(4.0);
+        let mut curved = ed.poly_curved;
+        if ui.segmented(&mut curved, &[(false, "Straight"), (true, "Curved")]) {
+            ed.poly_curved = curved;
+            pick_tool(ed, Tool::Polyline);
+        }
+        if ed.tool == Tool::Polyline {
+            ui.label(theme::secondary(ui, "Click to add points. Double-click or Enter ends the line; clicking the first point closes it. Shift keeps 45° steps."));
+        }
+    });
+}
+
+/// Flowchart boxes and how new connections are drawn.
+pub fn flowchart_ui(ui: &mut Ui, ed: &mut Editor) {
+    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         ui.horizontal_wrapped(|ui| {
-            let t = Tool::Connect;
-            let tip = format!("{} ({})", t.name(), t.key_name());
-            if icon_button(ui, TOOL_PX, ed.tool == t, &tip, |p, r, c, d| tools::paint_icon(p, r, t, c, d)).clicked() {
-                ed.finish_edit();
-                ed.tool = t;
-            }
             // Choosing a shape switches to the flowchart box tool.
             for s in Shape::FLOW {
                 let sel = ed.tool == Tool::Node && ed.node_shape == s;
@@ -139,42 +195,17 @@ pub fn tools_ui(ui: &mut Ui, ed: &mut Editor) {
                     paint_shape(p, s, r, 0.35, Color32::TRANSPARENT, Stroke::new(1.4, c));
                 });
                 if resp.clicked() {
-                    ed.finish_edit();
                     ed.node_shape = s;
-                    ed.tool = Tool::Node;
+                    pick_tool(ed, Tool::Node);
                 }
             }
         });
-        ui.add_space(2.0);
-    });
-
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        tool_grid(ui, ed, &[Tool::Select, Tool::Hand]);
-
-        theme::heading(ui, "DRAW");
         ui.add_space(4.0);
-        tool_grid(ui, ed, &[Tool::Pen, Tool::Pencil, Tool::Marker, Tool::Highlighter, Tool::Eraser]);
-        ui.add_space(4.0);
-        width_control(ui, ed);
-        ui.add_space(2.0);
-        if let Some(ink) = ink_row(ui, ed.style.ink) {
-            ed.style.ink = ink;
-            apply_to_selection(ed,|s| s.ink = ink);
-        }
-
-        theme::heading(ui, "SHAPES");
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            for t in [Tool::Line, Tool::Arrow, Tool::Rectangle, Tool::Ellipse, Tool::Text] {
-                let tip = format!("{} ({})", t.name(), t.key_name());
-                if icon_button(ui, TOOL_PX, ed.tool == t, &tip, |p, r, c, d| tools::paint_icon(p, r, t, c, d)).clicked() {
-                    ed.finish_edit();
-                    ed.tool = t;
-                }
-            }
-            if icon_button(ui, TOOL_PX, false, "Insert image (Ctrl+I)", tools::paint_image_icon).clicked() {
-                ed.pick_images();
+        theme::heading(ui, "CONNECTIONS");
+        // A menu rather than a segmented control: the column is narrow.
+        egui::ComboBox::from_id_salt("flow-wire-style").width((ui.available_width() - 8.0).max(60.0)).selected_text(ed.wire_style.name()).show_ui(ui, |ui| {
+            for s in [WireStyle::Curve, WireStyle::Straight, WireStyle::Elbow] {
+                ui.selectable_value(&mut ed.wire_style, s, s.name());
             }
         });
     });
@@ -186,7 +217,10 @@ fn apply_to_selection(ed: &mut Editor, f: impl Fn(&mut Style)) {
         return;
     }
     ed.mark_changed();
-    for id in ed.selection.clone() {
+    // A sketch's look is its strokes' look.
+    let sketches: Vec<Id> = ed.selection.iter().copied().filter(|id| ed.board.get(*id).is_some_and(|o| o.is_sketch())).collect();
+    let ids: Vec<Id> = ed.selection.iter().copied().chain(ed.board.with_descendants(&sketches)).collect();
+    for id in ids {
         if let Some(o) = ed.board.get_mut(id) {
             f(&mut o.style);
         }
@@ -455,9 +489,12 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
     let first = ed.selection[0];
     let Some(o) = ed.board.get(first).cloned() else { return };
     let single = ed.selection.len() == 1;
-    let is_group = o.is_group();
-    theme::heading(ui, if single && is_group { "GROUP" } else { "SELECTION" });
-    if single && is_group {
+    let is_group = o.is_group() && !o.is_sketch();
+    theme::heading(ui, if single && is_group { "GROUP" } else if single && o.is_sketch() { "SKETCH" } else { "SELECTION" });
+    if single && o.is_sketch() {
+        let n = ed.board.members(first).len();
+        ui.label(theme::secondary(ui, format!("{} joined into one. Ctrl+Shift+G splits it.", plural(n, "stroke", "strokes"))));
+    } else if single && is_group {
         let n = ed.board.members(first).len();
         ui.label(theme::secondary(ui, format!("Holds {}", plural(n, "item", "items"))));
     } else {
@@ -466,7 +503,7 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
 
     if single {
         let heading = match o.kind {
-            Kind::Image { .. } | Kind::Path { .. } => "CAPTION",
+            Kind::Image { .. } | Kind::Path { .. } | Kind::Group { sketch: true, .. } => "CAPTION",
             Kind::Group { .. } => "NAME",
             _ => "LABEL",
         };
@@ -492,10 +529,12 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
 
     let has = |f: &dyn Fn(&Kind) -> bool| ed.selection.iter().any(|id| ed.board.get(*id).is_some_and(|o| f(&o.kind)));
     let any_shape = has(&|k| matches!(k, Kind::Shape { .. }));
-    let any_group = has(&|k| matches!(k, Kind::Group { .. }));
-    let any_stroke = has(&|k| matches!(k, Kind::Shape { .. } | Kind::Path { .. }));
-    let any_text = has(&|k| matches!(k, Kind::Shape { .. } | Kind::Text | Kind::Group { .. }));
-    let any_path = has(&|k| matches!(k, Kind::Path { .. }));
+    let any_group = has(&|k| matches!(k, Kind::Group { sketch: false, .. }));
+    let any_stroke = has(&|k| matches!(k, Kind::Shape { .. } | Kind::Path { .. } | Kind::Group { sketch: true, .. }));
+    let any_text = has(&|k| matches!(k, Kind::Shape { .. } | Kind::Text | Kind::Group { sketch: false, .. }));
+    let any_path = has(&|k| matches!(k, Kind::Path { closed: false, .. }));
+    // A sketch shows the look of its first stroke.
+    let o_style = if o.is_sketch() { ed.board.with_descendants(&[first]).iter().filter_map(|id| ed.board.get(*id)).find(|x| !x.is_group()).map(|x| x.style).unwrap_or(o.style) } else { o.style };
 
     if let (true, Kind::Shape { shape }) = (single, &o.kind) {
         theme::heading(ui, "SHAPE");
@@ -526,14 +565,14 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         }
     } else if any_stroke {
         theme::heading(ui, "LINE");
-        if let Some(ink) = ink_row(ui, o.style.ink) {
+        if let Some(ink) = ink_row(ui, o_style.ink) {
             apply_to_selection(ed, |s| s.ink = ink);
         }
-        let mut dash = o.style.dash;
+        let mut dash = o_style.dash;
         if dash_control(ui, &mut dash) {
             apply_to_selection(ed, |s| s.dash = dash);
         }
-        let mut w = o.style.width;
+        let mut w = o_style.width;
         if ui.add(egui::Slider::new(&mut w, board::MIN_WIDTH..=board::MAX_WIDTH).logarithmic(true).text("Width")).changed() {
             apply_to_selection(ed, |s| s.width = w);
         }
@@ -543,6 +582,24 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
             apply_to_selection(ed, |s| s.ink = ink);
         }
         if any_group {
+            let mut fill = o.style.fill;
+            if ui.switch(&mut fill, "Fill").changed() {
+                apply_to_selection(ed, |s| s.fill = fill);
+            }
+        }
+    }
+    if let (true, Kind::Path { closed, curved, .. }) = (single, &o.kind) {
+        // Polylines: a smooth curve or straight corners; a closed one can be filled.
+        if *closed || *curved || matches!(o.kind, Kind::Path { ref points, .. } if points.len() > 2 && points.len() < 64) {
+            let mut c = *curved;
+            if ui.switch(&mut c, "Curved").changed() {
+                ed.mark_changed();
+                if let Some(Kind::Path { curved: x, .. }) = ed.board.get_mut(first).map(|o| &mut o.kind) {
+                    *x = c;
+                }
+            }
+        }
+        if *closed {
             let mut fill = o.style.fill;
             if ui.switch(&mut fill, "Fill").changed() {
                 apply_to_selection(ed, |s| s.fill = fill);
@@ -583,7 +640,7 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         ed.toggle_lock();
     }
     if single {
-        if let Kind::Group { collapsed, .. } = o.kind {
+        if let Kind::Group { collapsed, sketch: false, .. } = o.kind {
             let mut c = collapsed;
             if ui.switch(&mut c, "Collapsed").changed() {
                 ed.toggle_collapsed(first);
@@ -609,7 +666,8 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         if ui.button("Group").on_hover_text("Ctrl+G").clicked() {
             ed.group_selection();
         }
-        if ed.any_group_selected() && ui.button("Ungroup").on_hover_text("Ctrl+Shift+G").clicked() {
+        let label = if single && o.is_sketch() { "Split sketch" } else { "Ungroup" };
+        if ed.any_group_selected() && ui.button(label).on_hover_text("Ctrl+Shift+G").clicked() {
             ed.ungroup_selection();
         }
     });
@@ -1090,46 +1148,131 @@ pub fn comments_window(ctx: &egui::Context, ed: &mut Editor) {
     }
 }
 
+enum LayerAction {
+    Activate(Id),
+    Rename(Id, String),
+    Up(usize),
+    Down(usize),
+    MoveHere(Id),
+    Delete(Id),
+}
+
+/// Layers the user makes. The top of the list is in front; new items go on the highlighted layer.
 pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
-    let n = ed.board.objects.len();
-    ui.label(theme::secondary(ui, if n == 0 { "The board is empty.".to_owned() } else { format!("{}, front first", plural(n, "object", "objects")) }));
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        let hidden = ed.board.hidden_set();
-        let items: Vec<(Id, String)> = ed
-            .board
-            .objects
-            .iter()
-            .rev()
-            .map(|o| {
-                let mut t = format!("{}  {}", o.kind.name(), short_label(&o.label));
-                if o.locked {
-                    t.push_str("  · locked");
-                }
-                if hidden.contains(&o.id) {
-                    t.push_str("  · collapsed");
-                }
-                (o.id, t)
-            })
-            .collect();
-        for (id, text) in items {
-            let sel = ed.selection.contains(&id);
-            let resp = ui.add_sized([ui.available_width(), 22.0], egui::Button::selectable(sel, text).frame_when_inactive(false));
-            if resp.clicked() {
-                let mods = ui.input(|i| i.modifiers);
-                ed.finish_edit();
-                if mods.command || mods.shift {
-                    if sel {
-                        ed.selection.retain(|x| *x != id);
-                    } else {
-                        ed.selection.push(id);
-                    }
-                } else {
-                    ed.selection = vec![id];
-                }
-                ed.selected_wire = None;
-            }
+    let p = pal(ui.ctx());
+    let rename_id = ui.id().with("layer-rename");
+    let mut renaming: Option<(Id, String)> = ui.data(|d| d.get_temp(rename_id));
+    let mut action = None;
+    ui.horizontal(|ui| {
+        if ui.button("New layer").on_hover_text("Adds a layer above the current one").clicked() {
+            let id = ed.board.new_id();
+            let n = (1..).find(|n| !ed.board.layers.iter().any(|l| l.name == format!("Layer {n}"))).unwrap_or(1);
+            let at = ed.board.layers.iter().position(|l| l.id == ed.active_layer).map(|i| i + 1).unwrap_or(ed.board.layers.len());
+            ed.mark_changed();
+            ed.board.layers.insert(at, board::Layer { id, name: format!("Layer {n}") });
+            ed.active_layer = id;
+            renaming = Some((id, format!("Layer {n}")));
         }
     });
+    ui.label(theme::secondary(ui, "Top is in front. New items go on the highlighted layer. Double-click a name to rename it."));
+    ui.add_space(4.0);
+    let layers = ed.board.layers.clone();
+    let n = layers.len();
+    let has_sel = !ed.selection.is_empty();
+    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for (i, l) in layers.iter().enumerate().rev() {
+            let active = l.id == ed.active_layer;
+            let count = ed.board.objects.iter().filter(|o| o.layer == l.id && !o.is_group()).count();
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                let small = |ui: &mut Ui, text: &str, enabled: bool, tip: &str| ui.add_enabled(enabled, egui::Button::new(RichText::new(text).size(11.0)).frame(false).min_size(vec2(18.0, 22.0))).on_hover_text(tip).clicked();
+                if small(ui, "▲", i + 1 < n, "Move the layer up (in front)") {
+                    action = Some(LayerAction::Up(i));
+                }
+                if small(ui, "▼", i > 0, "Move the layer down (behind)") {
+                    action = Some(LayerAction::Down(i));
+                }
+                match &mut renaming {
+                    Some((rid, text)) if *rid == l.id => {
+                        let r = ui.add(egui::TextEdit::singleline(text).desired_width((ui.available_width() - 4.0).max(40.0)));
+                        r.request_focus();
+                        if r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let name = text.trim().to_owned();
+                            if !name.is_empty() && name != l.name {
+                                action = Some(LayerAction::Rename(l.id, name));
+                            }
+                            renaming = None;
+                        }
+                    }
+                    _ => {
+                        let right = if has_sel { 40.0 } else { 0.0 } + if n > 1 { 22.0 } else { 0.0 } + 28.0;
+                        let w = (ui.available_width() - right).max(40.0);
+                        let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+                        let bg = if active { p.accent.gamma_multiply(0.22) } else if resp.hovered() { p.bg_control_hover } else { Color32::TRANSPARENT };
+                        ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
+                        if active {
+                            ui.painter().rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 5.0), vec2(3.0, rect.height() - 10.0)), CornerRadius::same(2), p.accent);
+                        }
+                        let font = egui::FontId::proportional(13.0);
+                        let color = if active { p.text } else { p.text_secondary };
+                        ui.painter().text(pos2(rect.left() + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, short_label(&l.name), font, color);
+                        let resp = resp.on_hover_text(if active { "New items go on this layer" } else { "Click to put new items on this layer" });
+                        if resp.double_clicked() {
+                            renaming = Some((l.id, l.name.clone()));
+                        } else if resp.clicked() {
+                            action = Some(LayerAction::Activate(l.id));
+                        }
+                        ui.add_sized([28.0, 22.0], egui::Label::new(RichText::new(count.to_string()).size(11.0).color(p.text_secondary))).on_hover_text(plural(count, "item", "items"));
+                        if has_sel && ui.add(egui::Button::new(RichText::new("Move").size(11.0)).min_size(vec2(36.0, 20.0))).on_hover_text("Move the selected items to this layer").clicked() {
+                            action = Some(LayerAction::MoveHere(l.id));
+                        }
+                        if n > 1 && small(ui, "×", true, if count == 0 { "Delete the layer" } else { "Delete the layer and the items on it" }) {
+                            action = Some(LayerAction::Delete(l.id));
+                        }
+                    }
+                }
+            });
+        }
+    });
+    ui.data_mut(|d| match &renaming {
+        Some(r) => {
+            d.insert_temp(rename_id, r.clone());
+        }
+        None => d.remove::<(Id, String)>(rename_id),
+    });
+    let Some(action) = action else { return };
+    match action {
+        LayerAction::Activate(id) => ed.active_layer = id,
+        LayerAction::Rename(id, name) => {
+            ed.mark_changed();
+            if let Some(l) = ed.board.layers.iter_mut().find(|l| l.id == id) {
+                l.name = name;
+            }
+        }
+        LayerAction::Up(i) => {
+            ed.mark_changed();
+            ed.board.layers.swap(i, i + 1);
+        }
+        LayerAction::Down(i) => {
+            ed.mark_changed();
+            ed.board.layers.swap(i, i - 1);
+        }
+        LayerAction::MoveHere(id) => {
+            ed.mark_changed();
+            let sel = ed.selection.clone();
+            ed.board.set_layer(&sel, id);
+            ed.say(format!("Moved {} to {}", plural(sel.len(), "item", "items"), ed.board.layers.iter().find(|l| l.id == id).map(|l| l.name.clone()).unwrap_or_default()));
+        }
+        LayerAction::Delete(id) => {
+            ed.mark_changed();
+            let on: Vec<Id> = ed.board.objects.iter().filter(|o| o.layer == id).map(|o| o.id).collect();
+            let all = ed.board.with_descendants(&on);
+            ed.board.remove(&all);
+            ed.board.layers.retain(|l| l.id != id);
+            let b = &ed.board;
+            ed.selection.retain(|s| b.get(*s).is_some());
+        }
+    }
 }
 
 fn short_label(s: &str) -> String {

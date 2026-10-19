@@ -25,6 +25,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 **Draw and place**
 - Pen, pencil, marker and highlighter, each with its own width from hairline (0.25) to very thick (200). Strokes are smoothed as you draw.
 - Lines, arrows, rectangles, ellipses and text.
+- Polylines: click to add corners, straight or as a smooth curve. Click the first point again to close the shape and fill it.
 - Images by drag and drop from Explorer, Ctrl+V (including screenshots) or Ctrl+I.
 - Eleven flowchart shapes: empty node, process, decision, start or end, input or output, document, database, subprocess, manual input, connector and note.
 
@@ -36,9 +37,11 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 
 **Organise**
 - Named, coloured groups that move together, have their own ports, nest, and collapse into a single node.
+- Sketches: group strokes alone and they join into one item with no frame, which moves, resizes and connects as one.
+- Layers you make yourself: name them, reorder them to choose what is in front, and move items between them.
 - Snapping to other items' edges, centres and equal gaps while you move or resize, with guide lines. Hold Alt to skip it.
 - Lock items, change opacity, and add comment threads to any item.
-- Layers, a Graph panel listing connections, and a floating Overview map of the whole board.
+- A Graph panel listing connections, and a floating Overview map of the whole board.
 
 **Style**
 - Style presets, solid or gradient fills, solid, dashed or dotted lines, rounded corners, and sketch, glass and shadow effects.
@@ -59,11 +62,11 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 |---|---|
 | V, H | Select, pan |
 | P, B, K, Y, E | Pen, pencil, marker, highlighter, eraser |
-| L, A, R, O, T | Line, arrow, rectangle, ellipse, text |
+| L, A, U, R, O, T | Line, arrow, polyline, rectangle, ellipse, text |
 | N, C | Flowchart shape, connect |
 | `/` | Add an item (connected to the selection) |
 | Enter | Edit the selected item's label |
-| Ctrl+G, Ctrl+Shift+G | Group, ungroup |
+| Ctrl+G, Ctrl+Shift+G | Group, ungroup (strokes alone join into one sketch) |
 | Ctrl+L | Lock or unlock |
 | Ctrl+D, Delete | Duplicate, delete |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
@@ -86,11 +89,14 @@ Pan with the right or middle mouse button, or hold Space and drag. The mouse whe
 | Corner radius | Drag the small diamond inside a selected shape's top-left corner, or use Rounded and Corner in Properties. |
 | Labels | Double-click an item, or select it and press Enter. Images and sketches get a caption. Double-click empty board for new text. |
 | Connections | Drag from a port to another item's port, or anywhere on it (the facing side is used). The Connect tool connects from anywhere on an item. Double-click a connection to label it. |
+| Polylines | With the Polyline tool (U), click to add points; double-click or Enter ends the line, Esc drops it, Backspace takes back a point, Shift keeps 45° steps. Clicking the first point closes the shape. Straight or Curved is set in the Shapes panel and per line in Properties. |
+| Sketches | Select only strokes and press Ctrl+G: they become one sketch with no frame. Ctrl+Shift+G splits it back into strokes. |
+| Layers | New layer adds one above the current layer, which is where new and pasted items go. Click a layer to make it current, double-click to rename, use the arrows to reorder, Move to put the selected items on it. Deleting a layer deletes what is on it. |
 | Groups | Ctrl+G groups the selection. Double-click the name to rename it; Properties sets its colour and fill. Click the arrow beside the name to collapse it; connections to what is inside then attach to the group. |
 | Locking | Locked items can be selected but not moved, edited, erased or deleted. |
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
 | History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
-| Panels | Tools, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
+| Panels | Select, pan, connect, text and images are in the strip on the left. Draw, Shapes, Flowchart, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
 
 </details>
 
@@ -120,7 +126,7 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/snap.rs` | Snapping to edges, centres and equal gaps |
 | `src/insert.rs` | The `/` list |
 | `src/export.rs` | PNG and JPG export (a small software renderer) |
-| `src/panels.rs`, `src/overview.rs` | Tools, Properties, Layers, Graph, History and the Overview |
+| `src/panels.rs`, `src/overview.rs` | Tool strip, Draw, Shapes, Flowchart, Properties, Layers, Graph, History and the Overview |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 
 The look follows the **Grapht** design system: a quiet grey interface with one blue accent, Inter type, and round strokes. Its tokens and notes are in [`design/`](design). The logo is an "O" left open and closed by a blue dot; the brand kit and its generator are in [`brand/`](brand).

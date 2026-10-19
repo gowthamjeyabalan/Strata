@@ -384,3 +384,54 @@ mod tests {
         assert_eq!(contrast_text(Color32::from_rgb(40, 60, 120)), Color32::WHITE);
     }
 }
+
+/// Fill any simple polygon (concave too) by ear clipping. `pts` is in screen space; a repeated last
+/// point is ignored.
+pub fn fill_polygon(painter: &Painter, pts: &[Pos2], color: Color32) {
+    let mut pts = pts.to_vec();
+    if pts.len() > 1 && pts[0].distance(pts[pts.len() - 1]) < 0.01 {
+        pts.pop();
+    }
+    if pts.len() < 3 || color.a() == 0 {
+        return;
+    }
+    // Work counter-clockwise (in screen space, y down).
+    let area: f32 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x * b.y - b.x * a.y }).sum();
+    let mut idx: Vec<usize> = (0..pts.len()).collect();
+    if area < 0.0 {
+        idx.reverse();
+    }
+    let cross = |a: Pos2, b: Pos2, c: Pos2| (b - a).x * (c - a).y - (b - a).y * (c - a).x;
+    let mut mesh = egui::Mesh::default();
+    for p in &pts {
+        mesh.colored_vertex(*p, color);
+    }
+    let mut guard = 0;
+    while idx.len() > 3 && guard < pts.len() * pts.len() {
+        guard += 1;
+        let n = idx.len();
+        let mut clipped = false;
+        for i in 0..n {
+            let (ia, ib, ic) = (idx[(i + n - 1) % n], idx[i], idx[(i + 1) % n]);
+            let (a, b, c) = (pts[ia], pts[ib], pts[ic]);
+            if cross(a, b, c) <= 0.0 {
+                continue;
+            }
+            let ear = idx.iter().all(|&j| j == ia || j == ib || j == ic || !(cross(a, b, pts[j]) >= 0.0 && cross(b, c, pts[j]) >= 0.0 && cross(c, a, pts[j]) >= 0.0));
+            if ear {
+                mesh.add_triangle(ia as u32, ib as u32, ic as u32);
+                idx.remove(i);
+                clipped = true;
+                break;
+            }
+        }
+        if !clipped {
+            // Self-crossing outline: fan out what is left rather than loop forever.
+            break;
+        }
+    }
+    for k in 1..idx.len().saturating_sub(1) {
+        mesh.add_triangle(idx[0] as u32, idx[k] as u32, idx[k + 1] as u32);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}

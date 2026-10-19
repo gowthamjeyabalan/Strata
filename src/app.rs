@@ -14,7 +14,11 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum Tab {
     Board,
+    /// Layouts saved before the tools were split up still name this tab; it shows as Draw.
     Tools,
+    Draw,
+    Shapes,
+    Flowchart,
     Properties,
     Layers,
     Graph,
@@ -35,17 +39,20 @@ struct Settings {
     brush_widths: Option<[f32; 4]>,
     show_overview: Option<bool>,
     snapping: Option<bool>,
+    poly_curved: Option<bool>,
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 2;
+const DOCK_VERSION: u32 = 3;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
     let s = d.main_surface_mut();
-    // The board keeps most of the window; tools sit in a narrow column, panels on the right.
-    // For a left split the fraction is the new (left) pane's share.
-    let [board, _tools] = s.split_left(NodeIndex::root(), 0.067, vec![Tab::Tools]);
+    // The board keeps most of the window; Draw, Shapes and Flowchart are stacked in a narrow column,
+    // the other panels on the right. For a left split the fraction is the new (left) pane's share.
+    let [board, draw] = s.split_left(NodeIndex::root(), 0.1, vec![Tab::Draw]);
+    let [_draw, shapes] = s.split_below(draw, 0.36, vec![Tab::Shapes]);
+    s.split_below(shapes, 0.45, vec![Tab::Flowchart]);
     s.split_right(board, 0.8, vec![Tab::Properties, Tab::Layers, Tab::Graph, Tab::History]);
     d
 }
@@ -141,6 +148,9 @@ impl App {
         }
         if let Some(w) = settings.brush_widths {
             ed.brush_widths = w;
+        }
+        if let Some(c) = settings.poly_curved {
+            ed.poly_curved = c;
         }
         if let Some(s) = settings.snapping {
             ed.snapping = s;
@@ -286,6 +296,8 @@ impl App {
         if typing || ed.is_editing() {
             return;
         }
+        // A polyline being drawn takes Enter, Esc and Backspace.
+        ed.poly_keys(&ctx);
         if ev(cmd_shift(Key::Z)) || ev(cmd(Key::Y)) {
             ed.redo();
         } else if ev(cmd(Key::Z)) {
@@ -515,7 +527,9 @@ impl TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Board => "Board",
-            Tab::Tools => "Tools",
+            Tab::Tools | Tab::Draw => "Draw",
+            Tab::Shapes => "Shapes",
+            Tab::Flowchart => "Flowchart",
             Tab::Properties => "Properties",
             Tab::Layers => "Layers",
             Tab::Graph => "Graph",
@@ -527,7 +541,9 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut Ui, tab: &mut Tab) {
         match tab {
             Tab::Board => self.ed.canvas_ui(ui),
-            Tab::Tools => panels::tools_ui(ui, self.ed),
+            Tab::Tools | Tab::Draw => panels::draw_ui(ui, self.ed),
+            Tab::Shapes => panels::shapes_ui(ui, self.ed),
+            Tab::Flowchart => panels::flowchart_ui(ui, self.ed),
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
             Tab::Graph => panels::graph_ui(ui, self.ed),
@@ -550,7 +566,7 @@ impl TabViewer for Viewer<'_> {
                 s.tab_body.inner_margin = Margin::ZERO;
                 Some(s)
             }
-            Tab::Tools => {
+            Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => {
                 let mut s = global.clone();
                 s.tab_body.inner_margin = Margin::symmetric(8, 8);
                 Some(s)
@@ -617,6 +633,14 @@ impl App {
 
         let p = pal(&ctx);
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(6, 4))).show(ui, |ui| self.top_bar(ui));
+        // The tool strip down the left edge, like the toolbox in a paint program.
+        egui::Panel::left("tool-strip")
+            .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin { left: 6, right: 2, top: 2, bottom: 6 }))
+            .resizable(false)
+            .exact_size(32.0)
+            .show(ui, |ui| panels::tool_strip(ui, &mut self.ed, &mut self.show_overview));
+        // New items go on the current layer; the item list stays in layer order.
+        self.ed.board.fix_layers(&mut self.ed.active_layer);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| {
             let style = theme::dock_style(ui.ctx());
             DockArea::new(&mut self.dock)
@@ -657,6 +681,7 @@ impl App {
             brush_widths: Some(self.ed.brush_widths),
             show_overview: Some(self.show_overview),
             snapping: Some(self.ed.snapping),
+            poly_curved: Some(self.ed.poly_curved),
         };
         eframe::set_value(storage, SETTINGS_KEY, &s);
     }
