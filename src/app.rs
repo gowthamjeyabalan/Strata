@@ -394,14 +394,8 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         let p = pal(ui.ctx());
+        // As in Grapht: the menus start the row; the window's own title bar carries the icon and name.
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.add_space(4.0);
-            // The mark and the lowercase wordmark, as in the brand lockup.
-            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
-            theme::paint_mark(ui.painter(), r, p.text, p.accent);
-            ui.add_space(-2.0);
-            ui.label(egui::RichText::new("overlay").family(theme::display_family()).size(15.0).color(p.text));
-            ui.add_space(6.0);
             ui.menu_button("File", |ui| {
                 if ui.button("New board").clicked() {
                     self.request(ui.ctx(), Pending::New);
@@ -504,7 +498,14 @@ impl App {
     }
 
     fn update_title(&mut self, ui: &Ui) {
-        let t = format!("{}{} - Overlay", if self.ed.dirty { "• " } else { "" }, self.ed.file_name());
+        // Worded like Grapht's: the app's name alone, or the board's name and the app's. A dot marks
+        // unsaved changes.
+        let dot = if self.ed.dirty { "• " } else { "" };
+        let t = match self.ed.path.as_ref().and_then(|p| p.file_stem()) {
+            Some(stem) => format!("{dot}{} — Overlay", stem.to_string_lossy()),
+            None if self.ed.dirty => format!("{dot}Untitled — Overlay"),
+            None => "Overlay".to_owned(),
+        };
         if t != self.title {
             ui.ctx().send_viewport_cmd(ViewportCommand::Title(t.clone()));
             self.title = t;
@@ -631,7 +632,7 @@ impl App {
         self.update_title(ui);
 
         let p = pal(&ctx);
-        egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(6, 4))).show(ui, |ui| self.top_bar(ui));
+        egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
         // New items go on the current layer; the item list stays in layer order.
         self.ed.board.fix_layers(&mut self.ed.active_layer);
         // The Calendar's chosen days hide or fade the other items.

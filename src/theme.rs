@@ -169,20 +169,6 @@ pub fn display_family() -> FontFamily {
     FontFamily::Name("display".into())
 }
 
-/// The Overlay mark (an "O" closed by a blue dot) drawn into `rect`, in the brand's geometry:
-/// a 100-unit box, 10-unit round stroke, the arc open from 16° to -76° and the dot at -30°.
-pub fn paint_mark(painter: &egui::Painter, rect: egui::Rect, ink: Color32, dot: Color32) {
-    let s = rect.width().min(rect.height()) / 58.0;
-    let c = rect.center();
-    let at = |r: f32, deg: f32| c + egui::vec2(deg.to_radians().cos(), deg.to_radians().sin()) * r * s;
-    let pts: Vec<egui::Pos2> = (0..=48).map(|i| at(24.0, 16.0 + (284.0 - 16.0) * i as f32 / 48.0)).collect();
-    painter.add(egui::Shape::line(pts, Stroke::new(10.0 * s, ink)));
-    // Round ends, as in the brand files.
-    painter.circle_filled(at(24.0, 16.0), 5.0 * s, ink);
-    painter.circle_filled(at(24.0, 284.0), 5.0 * s, ink);
-    painter.circle_filled(at(24.0, -30.0), 8.0 * s, dot);
-}
-
 /// Install fonts and both styles, then pick the appearance.
 pub fn apply(ctx: &Context, appearance: Appearance) {
     install_fonts(ctx);
