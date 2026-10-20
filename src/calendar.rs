@@ -15,12 +15,13 @@ fn week_start(offset: i64) -> NaiveDate {
 }
 
 /// One item on one day.
-struct Entry {
-    id: Id,
+struct Entry<'a> {
+    /// Where it is in the board's list.
+    index: usize,
     /// Made that day (rather than changed).
     new: bool,
     /// When it was made, for sorting.
-    created: String,
+    created: &'a str,
 }
 
 pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
@@ -69,11 +70,14 @@ pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
 
     // ── each day's items ──
     let inner = ed.board.sketch_inner();
+    let first = keys[0].as_str();
+    let last = keys[6].as_str();
     let mut buckets: Vec<Vec<Entry>> = (0..7).map(|_| Vec::new()).collect();
-    for o in ed.board.objects.iter().filter(|o| !inner.contains(&o.id)) {
-        for d in &o.days {
+    for (index, o) in ed.board.objects.iter().enumerate().filter(|(_, o)| !inner.contains(&o.id)) {
+        // Days are kept sorted, so only the ones inside this week are looked at.
+        for d in o.days.iter().filter(|d| d.as_str() >= first && d.as_str() <= last) {
             if let Some(k) = keys.iter().position(|k| k == d) {
-                buckets[k].push(Entry { id: o.id, new: day_of(&o.created) == d, created: o.created.clone() });
+                buckets[k].push(Entry { index, new: day_of(&o.created) == d, created: &o.created });
             }
         }
     }
@@ -127,11 +131,13 @@ pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
         // The items, oldest first. Clicking one selects it and brings it into view.
         let list = Rect::from_min_max(pos2(rect.left() + 4.0, head.bottom() + 4.0), rect.max - vec2(4.0, 6.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).id_salt(("cal-list", key)));
-        ScrollArea::vertical().id_salt(("cal-scroll", key)).auto_shrink([false, false]).show(&mut child, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
-            for e in &buckets[k] {
-                let sel = ed.selection.contains(&e.id);
-                let text = RichText::new(ed.board.display_name(e.id)).size(12.0).color(if e.new { p.text } else { p.text_secondary });
+        // Only the rows in view are laid out, however busy the day was.
+        child.spacing_mut().item_spacing = vec2(0.0, 2.0);
+        ScrollArea::vertical().id_salt(("cal-scroll", key)).auto_shrink([false, false]).show_rows(&mut child, 20.0, buckets[k].len(), |ui, rows| {
+            for e in &buckets[k][rows] {
+                let o = &ed.board.objects[e.index];
+                let sel = ed.selection.contains(&o.id);
+                let text = RichText::new(ed.board.name_of(o)).size(12.0).color(if e.new { p.text } else { p.text_secondary });
                 let row = ui.add(egui::Button::selectable(sel, text).frame_when_inactive(false).min_size(vec2(ui.available_width(), 20.0)));
                 // A small dot marks items made that day; changed ones have none.
                 if e.new {
@@ -139,7 +145,7 @@ pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
                 }
                 let tip = if e.new { format!("Made at {}", e.created.get(11..16).unwrap_or("")) } else { "Changed".to_owned() };
                 if row.on_hover_text(tip).clicked() {
-                    pick = Some(e.id);
+                    pick = Some(o.id);
                 }
             }
         });

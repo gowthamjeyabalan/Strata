@@ -27,6 +27,7 @@ pub enum Tab {
     Properties,
     Layers,
     Graph,
+    /// Older layouts name it; History was removed (undo stays).
     History,
 }
 
@@ -48,7 +49,7 @@ struct Settings {
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 7;
+const DOCK_VERSION: u32 = 8;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
@@ -57,7 +58,7 @@ fn default_dock() -> DockState<Tab> {
     // the other panels are on the right.
     // Notes are listed on the left, like files in a notebook app; opened notes are tabs beside the board.
     let [board, _notes] = s.split_left(NodeIndex::root(), 0.17, vec![Tab::Notes]);
-    let [board, _panels] = s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Frames, Tab::Graph, Tab::History]);
+    let [board, _panels] = s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Frames, Tab::Graph]);
     s.split_below(board, 0.74, vec![Tab::Calendar]);
     d
 }
@@ -574,7 +575,9 @@ impl TabViewer for Viewer<'_> {
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
             Tab::Graph => panels::graph_ui(ui, self.ed),
-            Tab::History => panels::history_ui(ui, self.ed),
+            Tab::History => {
+                ui.label(theme::secondary(ui, "History was removed; Ctrl+Z and Ctrl+Y still undo and redo. View > Reset panel layout removes this tab."));
+            }
         }
     }
 
@@ -814,7 +817,6 @@ impl App {
                     Panel::Layers => Tab::Layers,
                     Panel::Frames => Tab::Frames,
                     Panel::Graph => Tab::Graph,
-                    Panel::History => Tab::History,
                     Panel::Calendar => Tab::Calendar,
                 };
                 if let Some(path) = self.dock.find_tab(&tab) {

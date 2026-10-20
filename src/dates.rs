@@ -1,10 +1,10 @@
 //! Dates on items: when each was made and every day it was changed, for the Calendar.
 //!
 //! Stamps are written when a change is recorded as a state, by comparing the board with the state
-//! before it. Boards made before items carried dates get theirs from the History.
+//! before it.
 
 use crate::board::{Board, Id, Kind, Object};
-use crate::history::{History, Snapshot};
+use crate::history::Snapshot;
 use std::collections::{HashMap, HashSet};
 
 /// The day part of a `YYYY-MM-DD HH:MM:SS` time.
@@ -63,33 +63,6 @@ pub fn stamp(prev: &Snapshot, b: &mut Board, now: &str) {
             }
             Some(p) if touched(p, o) => add_day(o, day),
             _ => {}
-        }
-    }
-}
-
-/// Give items without dates the ones the History knows: the state they first appear in, and every
-/// state that changed them.
-pub fn backfill(h: &History, b: &mut Board) {
-    if b.objects.iter().all(|o| !o.created.is_empty()) {
-        return;
-    }
-    let mut states: Vec<_> = h.states.iter().collect();
-    states.sort_by_key(|s| s.id);
-    let maps: HashMap<_, HashMap<Id, &Object>> = states.iter().map(|s| (s.id, s.board.objects.iter().map(|o| (o.id, &**o)).collect())).collect();
-    for o in b.objects.iter_mut().filter(|o| o.created.is_empty()) {
-        for s in &states {
-            let Some(now) = maps[&s.id].get(&o.id) else { continue };
-            let before = s.parent.and_then(|p| maps.get(&p)).and_then(|m| m.get(&o.id));
-            match before {
-                None => {
-                    if o.created.is_empty() {
-                        o.created = s.time.clone();
-                    }
-                    add_day(o, day_of(&s.time));
-                }
-                Some(p) if touched(p, now) => add_day(o, day_of(&s.time)),
-                _ => {}
-            }
         }
     }
 }

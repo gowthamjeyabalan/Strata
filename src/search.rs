@@ -22,7 +22,6 @@ pub enum Panel {
     Layers,
     Frames,
     Graph,
-    History,
     Calendar,
 }
 
@@ -95,7 +94,7 @@ fn commands() -> Vec<(Cmd, String, &'static str)> {
     for t in Tool::ALL {
         v.push((Cmd::Tool(t), format!("{} tool", t.name()), "tool draw"));
     }
-    for (p, name) in [(Panel::Properties, "Properties"), (Panel::Notes, "Notes"), (Panel::Layers, "Layers"), (Panel::Frames, "Frames"), (Panel::Graph, "Graph"), (Panel::History, "History"), (Panel::Calendar, "Calendar")] {
+    for (p, name) in [(Panel::Properties, "Properties"), (Panel::Notes, "Notes"), (Panel::Layers, "Layers"), (Panel::Frames, "Frames"), (Panel::Graph, "Graph"), (Panel::Calendar, "Calendar")] {
         v.push((Cmd::Show(p), format!("Show {name}"), "panel"));
     }
     v

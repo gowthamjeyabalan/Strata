@@ -60,7 +60,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Ctrl+K finds notes, text, comments and connection labels on every page, and frames, layers and pages, and runs any command or tool by name.
 
 **Calendar**
-- Every item records when it was made and each day it was changed, automatically. Boards with history get dates from it.
+- Every item records when it was made and each day it was changed, automatically.
 - The Calendar panel shows a week as day cards, each listing that day's items, with a bar showing how much was done.
 - Choose days to highlight their items on the board, or show only those items.
 
@@ -69,10 +69,8 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - An eyedropper that takes a colour from any item, or from a pixel of an image.
 - Dark, light, or follow Windows.
 
-**History with branches**
-- Every change is kept automatically. Deleting something starts a new branch, so the version before it is never lost.
-- The History tab draws states and branches as a graph. Hover to see what changed, double-click to go back, rename branches, and select states or branches to delete them or keep only them.
-- The whole history is saved inside the `.overlay` file.
+**Undo**
+- Ctrl+Z and Ctrl+Y undo and redo the last 100 changes while Overlay is open.
 
 **Share**
 - Export the board, the selection or the visible area as PNG or JPG, at up to 4x, with an optional transparent background.
@@ -118,13 +116,12 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Groups | Ctrl+G groups the selection. Double-click the name to rename it; Properties sets its colour and fill. Click the arrow beside the name to collapse it; connections to what is inside then attach to the group. |
 | Locking | Locked items can be selected but not moved, edited, erased or deleted. |
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
-| History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
 | Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto Add, Tools, Width, Layer, Colour, Arrange or View opens an outer ring (Add's sections open a third): move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
 | Notes | New note starts one (in the folder picked in the list) and opens it in a tab; Write, Split and Read switch between the editor and the preview. Double-click a note in the list, or its card on the board, to open it. Click notes in the list to pick them (Ctrl-click for more) and press Delete to delete them. New folder makes a folder; double-click its name to rename it, drag notes onto it to move them in, and click its arrow to fold it. Holding the right button on a note in the list opens its ring: open, place on board, move to a folder, delete. On the board, a selected note card's ring has a Note section with the same. Place on board adds a card; The mouse wheel over a card scrolls it (Ctrl+wheel zooms). Click a checkbox on a card to tick it, or a link to follow it. Deleting a note also deletes its cards. |
 | Pages | Click a page button under the board to show it, double-click to rename it, + adds one, and the × beside the current page deletes it with what is on it (Ctrl+Z brings it back). Each page keeps its own view. |
 | Frames | Frames sit behind everything and are picked by their edge or name. Double-click the name to rename it. In the Frames panel, click a frame to go to it, use the arrows to change the slide order, and ▶ to present from it. |
 | Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
-| Panels | Calendar, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
+| Panels | Notes, Calendar, Properties, Layers, Frames and Graph are dockable tabs. View > Reset panel layout restores the default. |
 
 </details>
 
@@ -142,19 +139,19 @@ cargo run --release
 
 ## How it is built
 
-Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_dock](https://github.com/Adanos020/egui_dock), using the OpenGL renderer to stay light. Boards are `.overlay` files: JSON with images embedded, and history stored so unchanged items are written once.
+Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_dock](https://github.com/Adanos020/egui_dock), using the OpenGL renderer to stay light. Boards are `.overlay` files: JSON with images embedded.
 
 | File | What it holds |
 |---|---|
 | `src/board.rs` | Items, connections, images, groups and the file format |
 | `src/editor.rs` | Selection, clipboard, image import, comments, open and save |
-| `src/history.rs` | States and branches, undo and redo |
+| `src/history.rs` | Undo and redo |
 | `src/canvas.rs` | Camera, the tools' pointer gestures, drawing |
 | `src/shapes.rs` | Shape outlines, fills, dashes and effects |
 | `src/snap.rs` | Snapping to edges, centres and equal gaps |
 | `src/insert.rs` | The `/` list |
 | `src/export.rs` | PNG and JPG export (a small software renderer) |
-| `src/panels.rs`, `src/overview.rs` | Properties, Layers, Graph, History and the Overview |
+| `src/panels.rs`, `src/overview.rs` | Notes, Properties, Layers, Frames, Graph and the Overview |
 | `src/radial.rs` | The radial menu: tools, new items and actions on the selection |
 | `src/markdown.rs` | Reading and drawing notes' markdown |
 | `src/search.rs` | Search everything (Ctrl+K) |

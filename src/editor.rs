@@ -3,7 +3,7 @@
 
 use crate::board::{Board, Brush, Comment, FILE_FORMAT, FileV1, Id, ImageAsset, Ink, Kind, Object, Shape, Style, Wire, WireStyle};
 use crate::canvas::{Camera, Drag};
-use crate::history::History;
+use crate::history::Undo;
 use crate::tools::Tool;
 use egui::{Pos2, Rect, TextureHandle, Vec2, vec2};
 use std::collections::HashMap;
@@ -30,8 +30,8 @@ struct Clip {
 
 pub struct Editor {
     pub board: Board,
-    /// Every state of the board, in branches. Undo and redo move through it.
-    pub history: History,
+    /// The last changes, for undo and redo.
+    pub history: Undo,
     /// When the board last changed without being recorded yet.
     pending: Option<Instant>,
     pub dirty: bool,
@@ -145,7 +145,7 @@ impl Default for Editor {
     fn default() -> Self {
         Self {
             board: Board::default(),
-            history: History::new(&Board::default(), "New board"),
+            history: Undo::new(&Board::default()),
             pending: None,
             dirty: false,
             path: None,
@@ -530,13 +530,8 @@ impl Editor {
     pub fn flush(&mut self) {
         if self.pending.take().is_some() {
             // New and changed items get today's date.
-            crate::dates::stamp(&self.history.current().board, &mut self.board, &crate::history::now());
-            if let Some((change, branched)) = self.history.record(&self.board) {
-                if branched {
-                    let name = self.history.branch(self.history.current().branch).map(|b| b.name.clone()).unwrap_or_default();
-                    self.say(format!("{}. Started {name}; the earlier version is kept.", change.label));
-                }
-            }
+            crate::dates::stamp(self.history.current(), &mut self.board, &crate::history::now());
+            self.history.record(&self.board);
         }
     }
 
@@ -575,61 +570,6 @@ impl Editor {
         if let Some(b) = self.history.redo() {
             self.board = b;
             self.after_history();
-        }
-    }
-
-    /// Show a state from the History panel.
-    pub fn jump_to_state(&mut self, id: crate::history::StateId) {
-        self.finish_edit();
-        self.flush();
-        if let Some(b) = self.history.jump(id) {
-            self.board = b;
-            self.after_history();
-        }
-    }
-
-    /// Delete several states and branches at once (branches first, then the states still there).
-    pub fn delete_history_selection(&mut self, states: &[crate::history::StateId], branches: &[crate::history::BranchId]) {
-        self.finish_edit();
-        self.flush();
-        let was = self.history.current;
-        let (mut s_done, mut b_done, mut skipped) = (0, 0, 0);
-        for b in branches {
-            if self.history.delete_branch(*b).is_ok() { b_done += 1 } else { skipped += 1 }
-        }
-        for s in states {
-            if self.history.state(*s).is_none() {
-                continue; // went with its branch
-            }
-            if self.history.delete_state(*s).is_ok() { s_done += 1 } else { skipped += 1 }
-        }
-        if self.history.current != was {
-            self.board = self.history.current().board.to_board();
-            self.after_history();
-        }
-        self.dirty = true;
-        let mut msg = format!("Deleted {} and {}", plural(s_done, "state", "states"), plural(b_done, "branch", "branches"));
-        if skipped > 0 {
-            msg.push_str(&format!("; {skipped} kept (the first state and the first branch stay)"));
-        }
-        self.say(msg);
-    }
-
-    /// Keep only the selection and the path to it (see `History::keep_only`).
-    pub fn keep_history_only(&mut self, states: &[crate::history::StateId], branches: &[crate::history::BranchId]) {
-        self.finish_edit();
-        self.flush();
-        let was = self.history.current;
-        match self.history.keep_only(states, branches) {
-            Ok(n) => {
-                if self.history.current != was {
-                    self.board = self.history.current().board.to_board();
-                    self.after_history();
-                }
-                self.dirty = true;
-                self.say(format!("Kept the selection; deleted {}", plural(n, "other state", "other states")));
-            }
-            Err(e) => self.say(e),
         }
     }
 
@@ -1094,40 +1034,30 @@ impl Editor {
             return Err("not an Overlay board".into());
         }
         *self = self.fresh();
-        let pool = f.board.images.clone();
         self.board = f.board;
         self.board.fix_after_load();
-        // The file keeps every image any state uses; the board only needs its own.
+        // Files from older versions kept images their history used; the board only needs its own.
         self.board.gc_images();
-        self.history = match f.history.and_then(|h| History::from_file(h, &pool)) {
-            Some(h) => {
-                // Boards from before items had dates take them from their history.
-                crate::dates::backfill(&h, &mut self.board);
-                h
-            }
-            None => History::new(&self.board, "Opened"),
-        };
+        self.history = Undo::new(&self.board);
         self.camera = f.camera;
         self.path = Some(path.to_owned());
         let n = self.board.objects.len();
-        let branches = self.history.branches.len();
-        let mut msg = format!("Opened {}, {}", plural(n, "object", "objects"), plural(self.board.wires.len(), "connection", "connections"));
-        if branches > 1 {
-            msg.push_str(&format!(", {}", plural(branches, "branch", "branches")));
-        }
-        self.say(msg);
+        self.say(format!("Opened {}, {}", plural(n, "object", "objects"), plural(self.board.wires.len(), "connection", "connections")));
         Ok(())
     }
 
     pub fn save_to(&mut self, path: &Path) -> Result<(), String> {
         self.finish_edit();
         self.flush();
-        // Every image any state uses is stored once, with the current board.
-        let mut board = self.board.clone();
-        for (k, v) in self.history.all_images() {
-            board.images.entry(k).or_insert(v);
+        // Written straight from the board, without copying it first.
+        #[derive(serde::Serialize)]
+        struct Out<'a> {
+            format: &'a str,
+            version: u32,
+            board: &'a Board,
+            camera: Camera,
         }
-        let f = FileV1 { format: FILE_FORMAT.into(), version: 2, board, camera: self.camera, history: Some(self.history.to_file()) };
+        let f = Out { format: FILE_FORMAT, version: 3, board: &self.board, camera: self.camera };
         let json = serde_json::to_string(&f).map_err(|e| e.to_string())?;
         let tmp = path.with_extension("overlay.tmp");
         std::fs::write(&tmp, json).map_err(|e| e.to_string())?;

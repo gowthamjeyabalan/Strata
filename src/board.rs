@@ -1029,10 +1029,17 @@ impl Board {
     /// A label to show for an object in lists: its text, or its kind and number.
     pub fn display_name(&self, id: Id) -> String {
         match self.get(id) {
-            Some(o) if !o.label.trim().is_empty() => o.label.lines().next().unwrap_or_default().chars().take(40).collect(),
-            Some(Object { kind: Kind::Note { note }, .. }) => self.note(*note).map(|n| n.title()).unwrap_or_else(|| "Deleted note".into()),
-            Some(o) => format!("{} {}", o.kind.name(), o.id),
+            Some(o) => self.name_of(o),
             None => "missing".into(),
+        }
+    }
+
+    /// `display_name` for an item already at hand (no search through the board).
+    pub fn name_of(&self, o: &Object) -> String {
+        match o {
+            o if !o.label.trim().is_empty() => o.label.lines().next().unwrap_or_default().chars().take(40).collect(),
+            Object { kind: Kind::Note { note }, .. } => self.note(*note).map(|n| n.title()).unwrap_or_else(|| "Deleted note".into()),
+            o => format!("{} {}", o.kind.name(), o.id),
         }
     }
 }
@@ -1238,9 +1245,6 @@ pub struct FileV1 {
     pub version: u32,
     pub board: Board,
     pub camera: crate::canvas::Camera,
-    /// States and branches (version 2 and later).
-    #[serde(default)]
-    pub history: Option<crate::history::HistoryFile>,
 }
 
 pub const FILE_FORMAT: &str = "overlay-board";
@@ -1385,7 +1389,7 @@ mod tests {
         let img = b.new_id();
         b.images.insert(img, ImageAsset { bytes: Arc::new(vec![1, 2, 3]), size: [1, 1] });
         b.add(Rect::from_min_size(Pos2::ZERO, vec2(1.0, 1.0)), Kind::Image { image: img }, Style::default());
-        let f = FileV1 { format: FILE_FORMAT.into(), version: 1, board: b, camera: Default::default(), history: None };
+        let f = FileV1 { format: FILE_FORMAT.into(), version: 1, board: b, camera: Default::default() };
         let s = serde_json::to_string(&f).unwrap();
         let back: FileV1 = serde_json::from_str(&s).unwrap();
         assert_eq!(back.board.images[&img].bytes.as_slice(), &[1, 2, 3]);
