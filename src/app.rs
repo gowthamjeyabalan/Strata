@@ -500,7 +500,8 @@ impl App {
                     }
                 });
                 ui.add_space(8.0);
-                let zoom = format!("{:.0}%", self.ed.camera.zoom * 100.0);
+                let z = self.ed.camera.zoom * 100.0;
+                let zoom = if z < 1.0 { format!("{z:.2}%") } else if z < 10.0 { format!("{z:.1}%") } else { format!("{z:.0}%") };
                 if ui.add(egui::Button::new(theme::secondary(ui, zoom)).frame(false)).on_hover_text("Zoom to fit (Shift+1)").clicked() {
                     self.ed.zoom_to_fit();
                 }

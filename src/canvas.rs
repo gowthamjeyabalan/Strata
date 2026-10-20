@@ -11,7 +11,9 @@ use egui::{
 };
 use serde::{Deserialize, Serialize};
 
-const MIN_ZOOM: f32 = 0.05;
+/// Far enough out to see a board that grew huge (strokes drawn while zoomed out are huge in world
+/// units).
+const MIN_ZOOM: f32 = 0.001;
 const MAX_ZOOM: f32 = 16.0;
 /// Pointer tolerance for hits, in screen pixels.
 const HIT_PX: f32 = 6.0;
