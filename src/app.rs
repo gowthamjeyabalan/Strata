@@ -20,6 +20,7 @@ pub enum Tab {
     Shapes,
     Flowchart,
     Calendar,
+    Notes,
     Properties,
     Layers,
     Graph,
@@ -44,14 +45,14 @@ struct Settings {
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 4;
+const DOCK_VERSION: u32 = 5;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
     let s = d.main_surface_mut();
     // The board keeps most of the window (the tools float over it), the Calendar sits under it, and
     // the other panels are on the right.
-    let [board, _panels] = s.split_right(NodeIndex::root(), 0.8, vec![Tab::Properties, Tab::Layers, Tab::Graph, Tab::History]);
+    let [board, _panels] = s.split_right(NodeIndex::root(), 0.8, vec![Tab::Properties, Tab::Notes, Tab::Layers, Tab::Graph, Tab::History]);
     s.split_below(board, 0.74, vec![Tab::Calendar]);
     d
 }
@@ -527,6 +528,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Board => "Board",
             Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => "Tools",
             Tab::Calendar => "Calendar",
+            Tab::Notes => "Notes",
             Tab::Properties => "Properties",
             Tab::Layers => "Layers",
             Tab::Graph => "Graph",
@@ -542,6 +544,7 @@ impl TabViewer for Viewer<'_> {
                 ui.label(theme::secondary(ui, "Tools are in the radial menu: hold the right mouse button on the board. View > Reset panel layout removes this tab."));
             }
             Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
+            Tab::Notes => panels::notes_ui(ui, self.ed),
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
             Tab::Graph => panels::graph_ui(ui, self.ed),
@@ -618,7 +621,15 @@ impl App {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
             let at = ctx.input(|i| i.pointer.hover_pos()).filter(|p| self.ed.canvas_rect.contains(*p)).map(|p| self.ed.camera.to_world(self.ed.canvas_rect.min, p)).unwrap_or_else(|| self.ed.paste_point());
-            let (boards, images): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("overlay")));
+            let (boards, rest): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("overlay")));
+            // Markdown files become notes, each with a card where they were dropped.
+            let (notes, images): (Vec<PathBuf>, Vec<PathBuf>) = rest.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")));
+            for (k, path) in notes.iter().enumerate() {
+                if let Ok(text) = std::fs::read_to_string(path) {
+                    let note = self.ed.add_note(&text);
+                    self.ed.place_note(note, at + egui::vec2(32.0, 32.0) * k as f32);
+                }
+            }
             if let Some(b) = boards.first() {
                 self.request(&ctx, Pending::OpenFile(b.clone()));
             }
@@ -645,10 +656,12 @@ impl App {
                 .show_inside(ui, &mut Viewer { ed: &mut self.ed });
         });
 
-        // The radial menu's Properties brings that panel to the front.
-        if std::mem::take(&mut self.ed.want_properties) {
-            if let Some(path) = self.dock.find_tab(&Tab::Properties) {
-                let _ = self.dock.set_active_tab(path);
+        // The radial menu's Properties, and opening a note, bring that panel to the front.
+        for (want, tab) in [(std::mem::take(&mut self.ed.want_properties), Tab::Properties), (std::mem::take(&mut self.ed.want_notes), Tab::Notes)] {
+            if want {
+                if let Some(path) = self.dock.find_tab(&tab) {
+                    let _ = self.dock.set_active_tab(path);
+                }
             }
         }
         overview::show(&ctx, &mut self.ed);

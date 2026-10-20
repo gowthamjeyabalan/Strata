@@ -303,6 +303,8 @@ pub enum Kind {
     },
     Shape { shape: Shape },
     Text,
+    /// A card showing a note from the board's notes (written in the Notes panel), as markdown.
+    Note { note: Id },
     /// A named, coloured frame around other objects. Its rect follows its members. A collapsed group
     /// hides its members and shows as one compact node; their connections attach to it instead.
     Group {
@@ -354,6 +356,7 @@ impl Kind {
             }
             Kind::Shape { shape } => shape.name(),
             Kind::Text => "Text",
+            Kind::Note { .. } => "Note",
             Kind::Group { sketch: true, .. } => "Sketch",
             Kind::Group { .. } => "Group",
         }
@@ -560,9 +563,37 @@ pub struct Board {
     /// Back to front. Every object is on one; their order decides what is in front.
     #[serde(default)]
     pub layers: Vec<Layer>,
+    /// Markdown notes, written in the Notes panel. A note shows on the board only where a note card
+    /// is placed for it.
+    #[serde(default)]
+    pub notes: Vec<Note>,
     /// Items left out by the calendar's day filter: treated as hidden. Set every frame, never saved.
     #[serde(skip)]
     pub veil: std::collections::HashSet<Id>,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Note {
+    pub id: Id,
+    /// Markdown.
+    pub text: String,
+    /// When it was made, `YYYY-MM-DD HH:MM:SS`.
+    #[serde(default)]
+    pub created: String,
+}
+
+impl Note {
+    /// The first line, without heading marks; "Untitled note" when empty.
+    pub fn title(&self) -> String {
+        note_title(&self.text)
+    }
+}
+
+/// A note's title: its first non-empty line, without markdown heading or list marks.
+pub fn note_title(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let t = line.trim_start_matches('#').trim_start_matches(['-', '*', '>']).trim();
+    if t.is_empty() { "Untitled note".into() } else { t.chars().take(60).collect() }
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -581,6 +612,12 @@ impl Board {
     }
     pub fn get_mut(&mut self, id: Id) -> Option<&mut Object> {
         self.objects.iter_mut().find(|o| o.id == id)
+    }
+    pub fn note(&self, id: Id) -> Option<&Note> {
+        self.notes.iter().find(|n| n.id == id)
+    }
+    pub fn note_mut(&mut self, id: Id) -> Option<&mut Note> {
+        self.notes.iter_mut().find(|n| n.id == id)
     }
     pub fn wire(&self, id: Id) -> Option<&Wire> {
         self.wires.iter().find(|w| w.id == id)
@@ -930,6 +967,7 @@ impl Board {
     pub fn display_name(&self, id: Id) -> String {
         match self.get(id) {
             Some(o) if !o.label.trim().is_empty() => o.label.lines().next().unwrap_or_default().chars().take(40).collect(),
+            Some(Object { kind: Kind::Note { note }, .. }) => self.note(*note).map(|n| n.title()).unwrap_or_else(|| "Deleted note".into()),
             Some(o) => format!("{} {}", o.kind.name(), o.id),
             None => "missing".into(),
         }

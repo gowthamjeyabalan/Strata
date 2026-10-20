@@ -10,6 +10,7 @@ mod editor;
 mod export;
 mod history;
 mod insert;
+mod markdown;
 mod overview;
 mod palettes;
 mod radial;

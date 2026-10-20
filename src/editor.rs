@@ -64,6 +64,19 @@ pub struct Editor {
     pub want_properties: bool,
     /// The Overview window is showing.
     pub show_overview: bool,
+    /// The note open in the Notes panel.
+    pub open_note: Option<Id>,
+    /// Asked for the Notes panel to be shown.
+    pub want_notes: bool,
+    pub note_query: String,
+    /// Notes panel: 0 edit, 1 split, 2 preview.
+    pub note_mode: u8,
+    /// How far each note card is scrolled, in world units.
+    pub(crate) note_scroll: HashMap<Id, f32>,
+    /// Each note card as last drawn: content height (world units) and what can be clicked (screen).
+    pub(crate) note_view: std::cell::RefCell<HashMap<Id, (f32, Vec<(Rect, crate::markdown::Target)>)>>,
+    /// A web link clicked in a note, to open.
+    pub(crate) open_url: Option<String>,
     /// Calendar: weeks before (negative) or after this one.
     pub cal_week: i64,
     /// Calendar: the chosen days, `YYYY-MM-DD`.
@@ -127,6 +140,13 @@ impl Default for Editor {
             radial_hold: None,
             want_properties: false,
             show_overview: true,
+            open_note: None,
+            want_notes: false,
+            note_query: String::new(),
+            note_mode: 1,
+            note_scroll: HashMap::new(),
+            note_view: Default::default(),
+            open_url: None,
             cal_week: 0,
             cal_days: Vec::new(),
             day_mode: crate::dates::DayMode::All,
@@ -190,6 +210,73 @@ impl Editor {
             tool: self.tool,
             snapping: self.snapping,
             ..Editor::default()
+        }
+    }
+
+    // ── notes ──
+
+    /// Write a new note (not on the board yet) and open it in the Notes panel.
+    pub fn add_note(&mut self, text: &str) -> Id {
+        let id = self.board.new_id();
+        self.board.notes.push(crate::board::Note { id, text: text.to_owned(), created: String::new() });
+        self.mark_changed();
+        self.open_note = Some(id);
+        self.want_notes = true;
+        id
+    }
+
+    /// Put a card for a note on the board, centred at `at`, and select it.
+    pub fn place_note(&mut self, note: Id, at: Pos2) -> Id {
+        let id = self.board.add(Rect::from_center_size(at, vec2(300.0, 240.0)), Kind::Note { note }, Style::default());
+        self.mark_changed();
+        self.selection = vec![id];
+        self.selected_wire = None;
+        id
+    }
+
+    /// Delete a note and every card showing it.
+    pub fn delete_note(&mut self, note: Id) {
+        let cards: Vec<Id> = self.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note: n } if n == note)).map(|o| o.id).collect();
+        self.mark_changed();
+        self.board.notes.retain(|n| n.id != note);
+        self.board.remove(&cards);
+        let b = &self.board;
+        self.selection.retain(|id| b.get(*id).is_some());
+        if self.open_note == Some(note) {
+            self.open_note = None;
+        }
+    }
+
+    pub fn toggle_note_task(&mut self, note: Id, line: usize) {
+        if let Some(n) = self.board.note_mut(note) {
+            n.text = crate::markdown::toggle_task(&n.text, line);
+            self.mark_changed();
+        }
+    }
+
+    /// Follow a link in a note: a web link opens in the browser; `[[Name]]` goes to the note or item
+    /// with that name (a note's card on the board, or else the note in the Notes panel).
+    pub fn follow_link(&mut self, link: &crate::markdown::Link) {
+        match link {
+            crate::markdown::Link::Url(u) => self.open_url = Some(u.clone()),
+            crate::markdown::Link::Wiki(name) => {
+                let key = name.trim().to_lowercase();
+                let note = self.board.notes.iter().find(|n| n.title().to_lowercase() == key).map(|n| n.id);
+                let card = note.and_then(|nid| self.board.objects.iter().find(|o| matches!(o.kind, Kind::Note { note: n } if n == nid)).map(|o| o.id));
+                let item = card.or_else(|| self.board.objects.iter().find(|o| self.board.display_name(o.id).to_lowercase() == key).map(|o| o.id));
+                if let Some(id) = item {
+                    if let Some(c) = self.board.get(id).map(|o| o.rect().center()) {
+                        self.camera.look_at(self.canvas_rect, c);
+                    }
+                    self.selection = vec![id];
+                    self.selected_wire = None;
+                } else if let Some(nid) = note {
+                    self.open_note = Some(nid);
+                    self.want_notes = true;
+                } else {
+                    self.say(format!("No note or item called \"{name}\""));
+                }
+            }
         }
     }
 
@@ -667,6 +754,12 @@ impl Editor {
                 }
                 Err(e) => self.say(format!("Clipboard image could not be read: {e}")),
             }
+            return;
+        }
+        if let Some(t) = text.as_ref().filter(|t| crate::markdown::looks_like_markdown(t)) {
+            let note = self.add_note(t);
+            self.place_note(note, at);
+            self.say("Pasted as a note");
             return;
         }
         if let Some(t) = text.filter(|t| !t.trim().is_empty()) {

@@ -43,7 +43,17 @@ fn add_day(o: &mut Object, day: &str) {
 pub fn stamp(prev: &Snapshot, b: &mut Board, now: &str) {
     let old: HashMap<Id, &Object> = prev.objects.iter().map(|o| (o.id, &**o)).collect();
     let day = day_of(now);
+    // Notes whose text changed: their cards count as worked on.
+    let edited: HashSet<Id> = b.notes.iter().filter(|n| prev.notes.iter().find(|p| p.id == n.id).is_none_or(|p| p.text != n.text)).map(|n| n.id).collect();
+    for n in b.notes.iter_mut().filter(|n| n.created.is_empty()) {
+        n.created = now.to_owned();
+    }
     for o in &mut b.objects {
+        if let Kind::Note { note } = o.kind {
+            if edited.contains(&note) {
+                add_day(o, day);
+            }
+        }
         match old.get(&o.id) {
             None => {
                 if o.created.is_empty() {

@@ -728,6 +728,16 @@ impl Editor {
         let tol = self.tol();
         match self.tool {
             Tool::Select | Tool::Connect => {
+                let s = self.camera.to_screen(self.canvas_rect.min, w);
+                let target = self.board.hit(w, tol).and_then(|id| match self.board.get(id).map(|o| &o.kind) {
+                    Some(Kind::Note { note }) => self.note_view.borrow().get(&id).and_then(|v| v.1.iter().find(|(r, _)| r.contains(s)).map(|(_, t)| (*note, t.clone()))),
+                    _ => None,
+                });
+                match target {
+                    Some((note, crate::markdown::Target::Task(line))) => return self.toggle_note_task(note, line),
+                    Some((_, crate::markdown::Target::Link(l))) => return self.follow_link(&l),
+                    None => {}
+                }
                 if let Some(id) = self.board.hit(w, tol) {
                     if mods.shift || mods.command {
                         if let Some(i) = self.selection.iter().position(|x| *x == id) {
@@ -772,6 +782,11 @@ impl Editor {
     fn double_click(&mut self, w: Pos2) {
         if self.tool == Tool::Polyline {
             self.finish_poly(false);
+            return;
+        }
+        if let Some(Kind::Note { note }) = self.board.hit(w, self.tol()).and_then(|id| self.board.get(id)).map(|o| o.kind.clone()) {
+            self.open_note = Some(note);
+            self.want_notes = true;
             return;
         }
         if self.tool != Tool::Select {
@@ -825,6 +840,19 @@ impl Editor {
         let over = ptr.filter(|p| rect.contains(*p) && resp.contains_pointer());
         self.hover_world = over.map(|s| self.camera.to_world(origin, s));
 
+        let mut scroll = scroll;
+        if let (Some(s), true) = (over, scroll.y != 0.0 && !mods.command) {
+            let w = self.camera.to_world(origin, s);
+            if let Some(id) = self.board.hit(w, self.tol()).filter(|id| matches!(self.board.get(*id).map(|o| &o.kind), Some(Kind::Note { .. }))) {
+                let view_h = self.board.get(id).map(|o| o.rect().height() - 28.0).unwrap_or(0.0);
+                let content = self.note_view.borrow().get(&id).map(|v| v.0).unwrap_or(0.0);
+                if content > view_h {
+                    let cur = self.note_scroll.entry(id).or_insert(0.0);
+                    *cur = (*cur - scroll.y / self.camera.zoom).clamp(0.0, content - view_h);
+                    scroll.y = 0.0;
+                }
+            }
+        }
         if let Some(s) = over {
             let factor = zoom_delta * (scroll.y * 0.0018).exp();
             if (factor - 1.0).abs() > 1e-4 {
@@ -940,6 +968,9 @@ impl Editor {
             }
         }
 
+        if let Some(url) = self.open_url.take() {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
         // Groups follow their members.
         self.board.update_groups();
         if self.tool != Tool::Polyline {
@@ -1216,6 +1247,42 @@ impl Editor {
                     let g = painter.layout_job(job);
                     painter.galley(pos2(r.center().x, r.center().y - g.size().y * 0.5), g, text);
                 }
+            }
+            Kind::Note { note } => {
+                // A card: the note, formatted, scrolled inside its frame.
+                let fill = match o.style.fill_color {
+                    Some(c) if o.style.fill => fade(c.color(p)),
+                    _ => fade(p.window_fill),
+                };
+                let border = if o.style.ink == board::Ink::Auto { fade(p.window_stroke) } else { ink };
+                let radius = CornerRadius::same((10.0 * z).clamp(2.0, 24.0) as u8);
+                painter.rect(r, radius, fill, Stroke::new(1.0, border), StrokeKind::Inside);
+                let pad = 14.0 * z;
+                let inner = r.shrink(pad);
+                let scroll = self.note_scroll.get(&o.id).copied().unwrap_or(0.0) * z;
+                let text_color = fade(if o.style.ink == board::Ink::Auto { p.text } else { ink });
+                let (height, hits) = match self.board.note(*note) {
+                    Some(n) if inner.width() > 4.0 && inner.height() > 4.0 => {
+                        let clipped = painter.with_clip_rect(inner.expand(2.0).intersect(painter.clip_rect()));
+                        let blocks = crate::markdown::parse(&n.text);
+                        crate::markdown::paint(&clipped, &blocks, inner.min - vec2(0.0, scroll), inner.width(), z, p, text_color)
+                    }
+                    Some(_) => (0.0, Vec::new()),
+                    None => {
+                        painter.text(r.center(), egui::Align2::CENTER_CENTER, "This note was deleted", FontId::proportional((12.0 * z).max(1.0)), p.text_secondary);
+                        (0.0, Vec::new())
+                    }
+                };
+                // A thin bar shows where the view is when the note is longer than its card.
+                if height > inner.height() + 1.0 {
+                    let frac = inner.height() / height;
+                    let track = Rect::from_min_max(pos2(r.right() - 5.0 * z, inner.top()), pos2(r.right() - 3.0 * z, inner.bottom()));
+                    let bar_h = (track.height() * frac).max(12.0 * z);
+                    let top = track.top() + (track.height() - bar_h) * (scroll / (height - inner.height()).max(1.0)).clamp(0.0, 1.0);
+                    painter.rect_filled(Rect::from_min_size(pos2(track.left(), top), vec2(track.width().max(1.5), bar_h)), CornerRadius::same(2), p.text_secondary.gamma_multiply(0.5));
+                }
+                let hits = hits.into_iter().filter(|(hr, _)| inner.expand(2.0).contains(hr.center())).collect();
+                self.note_view.borrow_mut().insert(o.id, (height / z, hits));
             }
             Kind::Text => {
                 if editing {

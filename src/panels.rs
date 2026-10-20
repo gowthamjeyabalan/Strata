@@ -1204,3 +1204,128 @@ pub fn graph_ui(ui: &mut Ui, ed: &mut Editor) {
         ed.selected_wire = Some(w);
     }
 }
+
+/// The Notes panel: every note on the board, then the open one, written in markdown with a preview.
+pub fn notes_ui(ui: &mut Ui, ed: &mut Editor) {
+    let p = pal(ui.ctx());
+    // Selecting a note's card opens that note here.
+    if let [id] = ed.selection[..] {
+        if let Some(Kind::Note { note }) = ed.board.get(id).map(|o| &o.kind) {
+            ed.open_note = Some(*note);
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.button("New note").clicked() {
+            ed.add_note("# New note\n\n");
+        }
+        ui.add(egui::TextEdit::singleline(&mut ed.note_query).hint_text("Search notes").desired_width(ui.available_width()));
+    });
+    ui.add_space(4.0);
+
+    // ── the list ──
+    let q = ed.note_query.trim().to_lowercase();
+    let rows: Vec<(Id, String, usize)> = ed
+        .board
+        .notes
+        .iter()
+        .rev()
+        .filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q))
+        .map(|n| (n.id, n.title(), ed.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note } if note == n.id)).count()))
+        .collect();
+    if ed.board.notes.is_empty() {
+        ui.label(theme::secondary(ui, "No notes yet. New note starts one; pasted markdown and dropped .md files become notes too."));
+    } else if rows.is_empty() {
+        ui.label(theme::secondary(ui, "No note matches."));
+    }
+    let list_h = (ui.available_height() * 0.28).clamp(60.0, 220.0);
+    ScrollArea::vertical().id_salt("notes-list").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
+        for (id, title, cards) in &rows {
+            let sel = ed.open_note == Some(*id);
+            let resp = ui.add(egui::Button::selectable(sel, short_label(title)).frame_when_inactive(false).min_size(vec2(ui.available_width(), 22.0)));
+            if *cards > 0 {
+                ui.painter().text(pos2(resp.rect.right() - 6.0, resp.rect.center().y), egui::Align2::RIGHT_CENTER, "on board", egui::FontId::proportional(11.0), p.text_secondary);
+            }
+            if resp.clicked() {
+                ed.open_note = Some(*id);
+            }
+        }
+    });
+    ui.separator();
+
+    // ── the open note ──
+    let Some(nid) = ed.open_note.filter(|id| ed.board.note(*id).is_some()) else {
+        ui.label(theme::secondary(ui, "Pick a note to read or write it."));
+        return;
+    };
+    let cards = ed.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note } if note == nid)).count();
+    let confirm_id = ui.id().with(("delete-note", nid));
+    let mut confirming: bool = ui.data(|d| d.get_temp(confirm_id)).unwrap_or(false);
+    ui.horizontal_wrapped(|ui| {
+        let place = if cards == 0 { "Place on board" } else { "Place another card" };
+        if ui.button(place).on_hover_text("A card showing this note, in the middle of the view").clicked() {
+            let at = ed.paste_point();
+            ed.place_note(nid, at);
+        }
+        if confirming {
+            let what = if cards == 0 { "Delete the note".to_owned() } else { format!("Delete the note and its {}", plural(cards, "card", "cards")) };
+            if ui.add(egui::Button::new(RichText::new(what).color(p.danger))).clicked() {
+                ed.delete_note(nid);
+                confirming = false;
+            }
+            if ui.button("Keep").clicked() {
+                confirming = false;
+            }
+        } else if ui.button("Delete").clicked() {
+            confirming = true;
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(confirm_id, confirming));
+    if ed.board.note(nid).is_none() {
+        return;
+    }
+    let mut mode = ed.note_mode;
+    if ui.segmented(&mut mode, &[(0, "Write"), (1, "Both"), (2, "Read")]) {
+        ed.note_mode = mode;
+    }
+    ui.add_space(4.0);
+
+    let avail = ui.available_height();
+    let edit_h = match ed.note_mode {
+        0 => avail,
+        1 => (avail * 0.5).max(80.0),
+        _ => 0.0,
+    };
+    if ed.note_mode != 2 {
+        let mut text = ed.board.note(nid).map(|n| n.text.clone()).unwrap_or_default();
+        ScrollArea::vertical().id_salt(("note-edit", nid)).max_height(edit_h).auto_shrink([false, false]).show(ui, |ui| {
+            let te = egui::TextEdit::multiline(&mut text).font(egui::FontId::monospace(12.5)).desired_width(f32::INFINITY).desired_rows(((edit_h / 17.0) as usize).max(4)).lock_focus(true);
+            if ui.add(te).changed() {
+                if let Some(n) = ed.board.note_mut(nid) {
+                    n.text = text.clone();
+                }
+                ed.mark_changed();
+            }
+        });
+    }
+    if ed.note_mode != 0 {
+        if ed.note_mode == 1 {
+            ui.separator();
+        }
+        let blocks = ed.board.note(nid).map(|n| crate::markdown::parse(&n.text)).unwrap_or_default();
+        let mut clicked = None;
+        ScrollArea::vertical().id_salt(("note-read", nid)).auto_shrink([false, false]).show(ui, |ui| {
+            let width = ui.available_width() - 6.0;
+            let top = ui.cursor().min;
+            let (h, hits) = crate::markdown::paint(ui.painter(), &blocks, top, width, 1.0, p, p.text);
+            let resp = ui.allocate_rect(egui::Rect::from_min_size(top, vec2(width, h.max(20.0))), Sense::click());
+            if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.clicked()) {
+                clicked = hits.into_iter().find(|(r, _)| r.contains(pos)).map(|(_, t)| t);
+            }
+        });
+        match clicked {
+            Some(crate::markdown::Target::Task(line)) => ed.toggle_note_task(nid, line),
+            Some(crate::markdown::Target::Link(l)) => ed.follow_link(&l),
+            None => {}
+        }
+    }
+}

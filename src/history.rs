@@ -10,7 +10,7 @@
 //!
 //! Undo and redo move along the tree; the History panel jumps to any state.
 
-use crate::board::{Board, Id, Kind, Layer, Object, Wire};
+use crate::board::{Board, Id, Kind, Layer, Note, Object, Wire};
 use crate::board::ImageAsset;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -40,6 +40,7 @@ pub struct Snapshot {
     pub images: BTreeMap<Id, ImageAsset>,
     pub next_id: Id,
     pub layers: Vec<Layer>,
+    pub notes: Vec<Note>,
 }
 
 impl Snapshot {
@@ -50,12 +51,12 @@ impl Snapshot {
             Some(a) if ***a == *o => Arc::clone(a),
             _ => Arc::new(o.clone()),
         });
-        Snapshot { objects: objects.collect(), wires: b.wires.clone(), images: b.images.clone(), next_id: b.next_id, layers: b.layers.clone() }
+        Snapshot { objects: objects.collect(), wires: b.wires.clone(), images: b.images.clone(), next_id: b.next_id, layers: b.layers.clone(), notes: b.notes.clone() }
     }
 
     /// An editable board from this state.
     pub fn to_board(&self) -> Board {
-        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), veil: Default::default() }
+        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), notes: self.notes.clone(), veil: Default::default() }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -69,6 +70,7 @@ pub trait View {
     fn objs(&self) -> Vec<&Object>;
     fn wire_list(&self) -> &[Wire];
     fn layer_list(&self) -> &[Layer];
+    fn note_list(&self) -> &[Note];
 }
 
 impl View for Board {
@@ -81,6 +83,9 @@ impl View for Board {
     fn layer_list(&self) -> &[Layer] {
         &self.layers
     }
+    fn note_list(&self) -> &[Note] {
+        &self.notes
+    }
 }
 
 impl View for Snapshot {
@@ -92,6 +97,9 @@ impl View for Snapshot {
     }
     fn layer_list(&self) -> &[Layer] {
         &self.layers
+    }
+    fn note_list(&self) -> &[Note] {
+        &self.notes
     }
 }
 
@@ -163,6 +171,9 @@ pub fn describe(a: &impl View, b: &impl View) -> Option<Change> {
     if wires_deleted > 0 {
         return Some(Change { label: format!("Deleted {}", count(wires_deleted, "connection", "connections")), deleted: true });
     }
+    if let Some(n) = a.note_list().iter().find(|n| !b.note_list().iter().any(|x| x.id == n.id)) {
+        return Some(Change { label: format!("Deleted note \"{}\"", n.title().chars().take(24).collect::<String>()), deleted: true });
+    }
 
     let added: Vec<&Object> = bo.iter().copied().filter(|o| !a_obj.contains_key(&o.id)).collect();
     let added_groups = added.iter().filter(|o| o.is_group()).count();
@@ -183,6 +194,8 @@ pub fn describe(a: &impl View, b: &impl View) -> Option<Change> {
     } else if !wires_added.is_empty() {
         format!("Added {}", count(wires_added.len(), "connection", "connections"))
     } else if let Some(l) = describe_layers(a.layer_list(), b.layer_list()) {
+        l
+    } else if let Some(l) = describe_notes(a.note_list(), b.note_list()) {
         l
     } else if let Some(l) = describe_edit(&ao, &bo, aw, bw, &a_obj) {
         l
@@ -208,6 +221,21 @@ fn describe_layers(a: &[Layer], b: &[Layer]) -> Option<String> {
         return Some(format!("Renamed {}", named(l)));
     }
     Some("Reordered layers".to_owned())
+}
+
+/// Notes written, edited or deleted in the Notes panel.
+fn describe_notes(a: &[Note], b: &[Note]) -> Option<String> {
+    if a == b {
+        return None;
+    }
+    let named = |n: &Note| format!("note \"{}\"", n.title().chars().take(24).collect::<String>());
+    if let Some(n) = b.iter().find(|n| !a.iter().any(|x| x.id == n.id)) {
+        return Some(format!("Wrote {}", named(n)));
+    }
+    if let Some(n) = a.iter().find(|n| !b.iter().any(|x| x.id == n.id)) {
+        return Some(format!("Deleted {}", named(n)));
+    }
+    b.iter().find(|n| a.iter().any(|x| x.id == n.id && x.text != n.text)).map(|n| format!("Edited {}", named(n)))
 }
 
 /// Same items and connections, something about them changed.
@@ -503,6 +531,7 @@ impl History {
                 wires: s.board.wires.clone(),
                 next_id: s.board.next_id,
                 layers: s.board.layers.clone(),
+                notes: s.board.notes.clone(),
             });
         }
         HistoryFile { objects, states, branches: self.branches.clone(), current: self.current }
@@ -529,7 +558,7 @@ impl History {
                 .iter()
                 .filter_map(|o| if let Kind::Image { image } = o.kind { images.get(&image).map(|a| (image, a.clone())) } else { None })
                 .collect();
-            let board = Snapshot { objects, wires: s.wires, images: imgs, next_id: s.next_id, layers: s.layers };
+            let board = Snapshot { objects, wires: s.wires, images: imgs, next_id: s.next_id, layers: s.layers, notes: s.notes };
             states.push(State { id: s.id, parent: s.parent, branch: s.branch, time: s.time, label: s.label, board });
         }
         let h = History { states, branches: f.branches, current: f.current, redo_to: HashMap::new() };
@@ -556,6 +585,8 @@ pub struct StateFile {
     pub next_id: Id,
     #[serde(default)]
     pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub notes: Vec<Note>,
 }
 
 #[derive(Serialize, Deserialize)]

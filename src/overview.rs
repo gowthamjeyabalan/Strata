@@ -108,6 +108,9 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
                         let fill = if o.style.fill { ink.gamma_multiply(0.25) } else { Color32::TRANSPARENT };
                         paint_shape(&painter, *shape, r, scale, fill, Stroke::new(1.0, ink));
                     }
+                    Kind::Note { .. } => {
+                        painter.rect(r, CornerRadius::same(2), p.window_fill, Stroke::new(1.0, p.window_stroke), StrokeKind::Inside);
+                    }
                     Kind::Text => {
                         painter.rect_filled(r, 1.0, ink.gamma_multiply(0.35));
                     }
