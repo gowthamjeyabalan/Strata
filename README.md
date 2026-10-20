@@ -18,7 +18,7 @@
 
 ## Download
 
-Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/overlay/releases/latest) and run it. There is nothing to install: it is a single 12 MB file and needs Windows 10 or 11. Try it on [`examples/demo.overlay`](examples/demo.overlay).
+Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/overlay/releases/latest) and run it. There is nothing to install: it is a single 10 MB file and needs Windows 10 or 11. Try it on [`examples/demo.overlay`](examples/demo.overlay).
 
 ## Features
 

@@ -1,6 +1,6 @@
 [package]
 name = "overlay"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A whiteboard where every image, sketch, shape and flowchart box is a node in a graph"
 license = "MIT"
