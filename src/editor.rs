@@ -51,10 +51,22 @@ pub struct Editor {
     pub brush_widths: [f32; 4],
     /// New items go on this layer.
     pub active_layer: Id,
+    /// The page showing; new items go on it.
+    pub page: Id,
+    /// Presenting: which of the page's frames is showing.
+    pub presenting: Option<usize>,
+    /// The view before presenting, to return to.
+    pub(crate) present_cam: Option<Camera>,
+    /// Where each page's view was left, to come back to it.
+    pub(crate) page_cams: HashMap<Id, Camera>,
+    /// A page whose name is being typed, and the name so far.
+    pub(crate) renaming_page: Option<(Id, String)>,
     /// Corners of the polyline being drawn, in world space.
     pub poly: Vec<Pos2>,
     /// The polyline tool draws a smooth curve through its points.
     pub poly_curved: bool,
+    /// Search everything (Ctrl+K), while it is open.
+    pub palette: Option<crate::search::Palette>,
     /// The radial menu, while it is open.
     pub radial: Option<crate::radial::Radial>,
     /// Right button held on empty board: where (screen, world) and since when. Held still, it opens
@@ -64,6 +76,8 @@ pub struct Editor {
     pub want_properties: bool,
     /// The Overview window is showing.
     pub show_overview: bool,
+    /// Dotted lines join the cards of notes that link to each other.
+    pub show_note_links: bool,
     /// The board was drawn this frame (its tab is the one showing).
     pub(crate) canvas_visible: bool,
     /// A note to open in its own tab beside the board (taken by the app).
@@ -144,12 +158,19 @@ impl Default for Editor {
             wire_style: WireStyle::Curve,
             brush_widths: Brush::ALL.map(|b| b.default_width()),
             active_layer: 0,
+            page: 0,
+            presenting: None,
+            present_cam: None,
+            page_cams: HashMap::new(),
+            renaming_page: None,
             poly: Vec::new(),
             poly_curved: false,
+            palette: None,
             radial: None,
             radial_hold: None,
             want_properties: false,
             show_overview: true,
+            show_note_links: true,
             canvas_visible: false,
             open_note: None,
             note_query: String::new(),
@@ -243,6 +264,17 @@ impl Editor {
         id
     }
 
+    /// A new layer above the current one, which becomes current. Returns it and its name.
+    pub fn add_layer(&mut self) -> (Id, String) {
+        let id = self.board.new_id();
+        let n = (1..).find(|n| !self.board.layers.iter().any(|l| l.name == format!("Layer {n}"))).unwrap_or(1);
+        let at = self.board.layers.iter().position(|l| l.id == self.active_layer).map(|i| i + 1).unwrap_or(self.board.layers.len());
+        self.mark_changed();
+        self.board.layers.insert(at, crate::board::Layer { id, name: format!("Layer {n}") });
+        self.active_layer = id;
+        (id, format!("Layer {n}"))
+    }
+
     pub fn add_folder(&mut self) -> Id {
         let id = self.board.new_id();
         let n = (1..).find(|n| !self.board.folders.iter().any(|f| f.name == format!("Folder {n}"))).unwrap_or(1);
@@ -275,6 +307,21 @@ impl Editor {
                 n.folder = folder;
             }
         }
+    }
+
+    /// Notes that link to `note` with `[[Its title]]`, and notes that only mention its title.
+    pub fn backlinks(&self, note: Id) -> (Vec<Id>, Vec<Id>) {
+        let Some(title) = self.board.note(note).map(|n| n.title().to_lowercase()) else { return (Vec::new(), Vec::new()) };
+        let mut linked = Vec::new();
+        let mut mentioned = Vec::new();
+        for n in self.board.notes.iter().filter(|n| n.id != note) {
+            if crate::markdown::wiki_links(&n.text).iter().any(|l| l.to_lowercase() == title) {
+                linked.push(n.id);
+            } else if title.chars().count() >= 3 && n.text.to_lowercase().contains(&title) {
+                mentioned.push(n.id);
+            }
+        }
+        (linked, mentioned)
     }
 
     /// Delete several notes, and their cards.
@@ -325,11 +372,7 @@ impl Editor {
                 let card = note.and_then(|nid| self.board.objects.iter().find(|o| matches!(o.kind, Kind::Note { note: n } if n == nid)).map(|o| o.id));
                 let item = card.or_else(|| self.board.objects.iter().find(|o| self.board.display_name(o.id).to_lowercase() == key).map(|o| o.id));
                 if let Some(id) = item {
-                    if let Some(c) = self.board.get(id).map(|o| o.rect().center()) {
-                        self.camera.look_at(self.canvas_rect, c);
-                    }
-                    self.selection = vec![id];
-                    self.selected_wire = None;
+                    self.go_to(id);
                 } else if let Some(nid) = note {
                     self.open_note = Some(nid);
                 } else {
@@ -339,29 +382,120 @@ impl Editor {
         }
     }
 
-    /// Apply the Calendar's chosen days to the board: hide or fade the items from other days.
+    /// Hide what should not show: items on other pages, and with the Calendar's chosen days, the
+    /// items from other days (hidden, or only faded while highlighting).
     pub fn apply_day_filter(&mut self) {
         use crate::dates::DayMode;
+        let page = self.page;
+        let mut veil: std::collections::HashSet<Id> = self.board.objects.iter().filter(|o| o.page != page).map(|o| o.id).collect();
         if self.cal_days.is_empty() || self.day_mode == DayMode::All {
-            if !self.board.veil.is_empty() || !self.day_shown.is_empty() {
-                self.board.veil.clear();
-                self.day_shown.clear();
-                self.day_direct.clear();
-            }
-            return;
-        }
-        let (shown, direct) = crate::dates::matching(&self.board, &self.cal_days);
-        if self.day_mode == DayMode::Only {
-            self.board.veil = self.board.objects.iter().map(|o| o.id).filter(|id| !shown.contains(id)).collect();
             self.day_shown.clear();
             self.day_direct.clear();
-            let veil = &self.board.veil;
-            self.selection.retain(|id| !veil.contains(id));
         } else {
-            self.board.veil.clear();
-            self.day_shown = shown;
-            self.day_direct = direct;
+            let (shown, direct) = crate::dates::matching(&self.board, &self.cal_days);
+            if self.day_mode == DayMode::Only {
+                veil.extend(self.board.objects.iter().map(|o| o.id).filter(|id| !shown.contains(id)));
+                self.day_shown.clear();
+                self.day_direct.clear();
+            } else {
+                self.day_shown = shown;
+                self.day_direct = direct;
+            }
         }
+        if !veil.is_empty() {
+            self.selection.retain(|id| !veil.contains(id));
+        }
+        self.board.veil = veil;
+    }
+
+    // ── frames and presenting ──
+
+    /// Present the page's frames full screen, starting at `from`.
+    pub fn start_present(&mut self, from: usize) {
+        let frames = self.board.frames(self.page);
+        if frames.is_empty() {
+            self.say("Draw a frame first: the Frame tool (F), or Add > Shapes > Frame.");
+            return;
+        }
+        self.finish_edit();
+        self.present_cam = Some(self.camera);
+        self.presenting = Some(from.min(frames.len() - 1));
+    }
+
+    pub fn stop_present(&mut self) {
+        self.presenting = None;
+        if let Some(c) = self.present_cam.take() {
+            self.camera = c;
+        }
+    }
+
+    /// Fit the view to a frame and select it.
+    pub fn show_frame(&mut self, id: Id) {
+        if let Some(r) = self.board.get(id).map(|o| o.rect()) {
+            self.camera.fit(self.canvas_rect, r.expand(r.width().max(r.height()) * 0.04));
+            self.selection = vec![id];
+            self.selected_wire = None;
+        }
+    }
+
+    // ── pages ──
+
+    /// Show another page, keeping each page's view.
+    pub fn switch_page(&mut self, id: Id) {
+        if id == self.page || !self.board.pages.iter().any(|p| p.id == id) {
+            return;
+        }
+        self.finish_edit();
+        self.page_cams.insert(self.page, self.camera);
+        self.page = id;
+        self.selection.clear();
+        self.selected_wire = None;
+        self.poly.clear();
+        match self.page_cams.get(&id) {
+            Some(c) => self.camera = *c,
+            None => self.fit_pending = true,
+        }
+        // Hide the other pages at once, so this frame already shows the new page.
+        self.apply_day_filter();
+    }
+
+    pub fn add_page(&mut self) {
+        let id = self.board.new_id();
+        let n = (1..).find(|n| !self.board.pages.iter().any(|p| p.name == format!("Page {n}"))).unwrap_or(1);
+        let at = self.board.pages.iter().position(|p| p.id == self.page).map(|i| i + 1).unwrap_or(self.board.pages.len());
+        self.board.pages.insert(at, crate::board::Page { id, name: format!("Page {n}") });
+        self.mark_changed();
+        self.switch_page(id);
+        self.camera = Camera::centered(self.canvas_rect);
+        self.fit_pending = false;
+    }
+
+    /// Delete a page and everything on it. There is always at least one page.
+    pub fn delete_page(&mut self, id: Id) {
+        if self.board.pages.len() < 2 {
+            return;
+        }
+        let name = self.board.pages.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+        let on: Vec<Id> = self.board.objects.iter().filter(|o| o.page == id).map(|o| o.id).collect();
+        if self.page == id {
+            let other = self.board.pages.iter().find(|p| p.id != id).map(|p| p.id).unwrap_or(0);
+            self.switch_page(other);
+        }
+        self.mark_changed();
+        self.board.remove(&on);
+        self.board.pages.retain(|p| p.id != id);
+        self.say(format!("Deleted page \"{name}\". Ctrl+Z brings it back."));
+    }
+
+    /// Select an item and bring it into view, on whatever page it is.
+    pub fn go_to(&mut self, id: Id) {
+        let Some((page, c)) = self.board.get(id).map(|o| (o.page, o.rect().center())) else { return };
+        self.switch_page(page);
+        self.camera.look_at(self.canvas_rect, c);
+        self.fit_pending = false;
+        self.finish_edit();
+        self.selection = vec![self.board.outer_sketch(id)];
+        self.selected_wire = None;
     }
 
     // ── history ──
@@ -748,8 +882,9 @@ impl Editor {
                     *image = *x;
                 }
             }
-            // Pasted items land on the current layer, and are new today.
+            // Pasted items land on the current layer and page, and are new today.
             n.layer = self.active_layer;
+            n.page = self.page;
             n.created.clear();
             n.days.clear();
             map.insert(o.id, n.id);

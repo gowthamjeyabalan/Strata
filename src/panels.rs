@@ -1007,13 +1007,7 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
     let mut action = None;
     ui.horizontal(|ui| {
         if ui.button("New layer").on_hover_text("Adds a layer above the current one").clicked() {
-            let id = ed.board.new_id();
-            let n = (1..).find(|n| !ed.board.layers.iter().any(|l| l.name == format!("Layer {n}"))).unwrap_or(1);
-            let at = ed.board.layers.iter().position(|l| l.id == ed.active_layer).map(|i| i + 1).unwrap_or(ed.board.layers.len());
-            ed.mark_changed();
-            ed.board.layers.insert(at, board::Layer { id, name: format!("Layer {n}") });
-            ed.active_layer = id;
-            renaming = Some((id, format!("Layer {n}")));
+            renaming = Some(ed.add_layer());
         }
     });
     ui.label(theme::secondary(ui, "Top is in front. New items go on the highlighted layer. Double-click a name to rename it."));
@@ -1464,6 +1458,29 @@ pub fn note_view(ui: &mut Ui, ed: &mut Editor, nid: Id) {
     if ed.board.note(nid).is_none() {
         return;
     }
+    // What links here, and what only names this note.
+    let (linked, mentioned) = ed.backlinks(nid);
+    let mut go = None;
+    for (label, ids) in [("Linked from", &linked), ("Mentioned in", &mentioned)] {
+        if ids.is_empty() {
+            continue;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(theme::secondary(ui, label));
+            for id in ids.iter() {
+                let t = ed.board.note(*id).map(|n| n.title()).unwrap_or_default();
+                if ui.link(t).on_hover_text("Open this note").clicked() {
+                    go = Some(*id);
+                }
+            }
+        });
+    }
+    if linked.is_empty() && mentioned.is_empty() {
+        ui.label(theme::secondary(ui, "No other note links here yet. Write [[ and a name to link notes."));
+    }
+    if let Some(id) = go {
+        ed.open_note = Some(id);
+    }
     ui.add_space(6.0);
     ui.separator();
 
@@ -1495,17 +1512,106 @@ fn centred(ui: &mut Ui, avail: f32, f: impl FnOnce(&mut Ui, f32)) {
 }
 
 fn note_editor(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32) {
+    let p = pal(ui.ctx());
     let mut text = ed.board.note(nid).map(|n| n.text.clone()).unwrap_or_default();
+    let te_id = ui.make_persistent_id(("note-text", nid));
+    let ac_id = te_id.with("complete");
+    // [[ completion: while its list is showing it takes the arrow keys, Enter, Tab and Esc.
+    let (mut pick, list_len) = ui.data(|d| d.get_temp::<(usize, usize)>(ac_id)).unwrap_or((0, 0));
+    let mut accept = false;
+    let mut dismiss = false;
+    if list_len > 0 {
+        ui.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                pick = (pick + 1) % list_len;
+            }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                pick = (pick + list_len - 1) % list_len;
+            }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+                accept = true;
+            }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                dismiss = true;
+            }
+        });
+    }
+    if dismiss {
+        ui.data_mut(|d| d.insert_temp(ac_id.with("off"), true));
+    }
+    let mut changed = false;
+    let mut out = None;
     ScrollArea::vertical().id_salt(("note-edit", nid)).auto_shrink([false, false]).show(ui, |ui| {
         let rows = ((ui.available_height() / 19.0) as usize).max(6);
-        let te = egui::TextEdit::multiline(&mut text).id_salt(("note-text", nid)).font(egui::FontId::proportional(14.5)).frame(egui::Frame::NONE).desired_width(width - 8.0).desired_rows(rows).lock_focus(true);
-        if ui.add(te).changed() {
-            if let Some(n) = ed.board.note_mut(nid) {
-                n.text = text.clone();
-            }
-            ed.mark_changed();
-        }
+        let te = egui::TextEdit::multiline(&mut text).id(te_id).font(egui::FontId::proportional(14.5)).frame(egui::Frame::NONE).desired_width(width - 8.0).desired_rows(rows).lock_focus(true);
+        let o = te.show(ui);
+        changed = o.response.changed();
+        out = Some(o);
     });
+    let Some(out) = out else { return };
+    if changed {
+        ui.data_mut(|d| d.remove::<bool>(ac_id.with("off")));
+    }
+
+    // The words typed since an unclosed [[ before the cursor.
+    let cursor = out.cursor_range.map(|c| c.primary.index.0);
+    let chars: Vec<char> = text.chars().collect();
+    let open = cursor.filter(|_| out.response.has_focus()).and_then(|c| {
+        let before: String = chars[..c.min(chars.len())].iter().collect();
+        let start = before.rfind("[[")?;
+        let typed = &before[start + 2..];
+        (!typed.contains("]]") && !typed.contains('\n')).then(|| (before[..start].chars().count() + 2, typed.to_owned(), c))
+    });
+    let off = ui.data(|d| d.get_temp::<bool>(ac_id.with("off"))).unwrap_or(false);
+    let titles: Vec<String> = match &open {
+        Some((_, typed, _)) if !off => {
+            let q = typed.to_lowercase();
+            let mut t: Vec<String> = ed.board.notes.iter().filter(|n| n.id != nid).map(|n| n.title()).filter(|t| q.is_empty() || t.to_lowercase().contains(&q)).collect();
+            t.sort_by_key(|t| !t.to_lowercase().starts_with(&q));
+            t.truncate(8);
+            t
+        }
+        _ => Vec::new(),
+    };
+    let pick = pick.min(titles.len().saturating_sub(1));
+    let mut chosen = accept.then(|| titles.get(pick).cloned()).flatten();
+    if let (Some((from, _, to)), false) = (&open, titles.is_empty()) {
+        // The list, just under the cursor.
+        let at = out.galley_pos + out.galley.pos_from_cursor(egui::text::CCursor::new(*to)).left_bottom().to_vec2() + vec2(0.0, 4.0);
+        egui::Area::new(ac_id.with("list")).order(egui::Order::Foreground).fixed_pos(at).show(ui.ctx(), |ui| {
+            egui::Frame::new().fill(p.window_fill).stroke(Stroke::new(1.0, p.window_stroke)).corner_radius(8).inner_margin(egui::Margin::same(4)).shadow(ui.ctx().global_style().visuals.popup_shadow).show(ui, |ui| {
+                ui.set_min_width(200.0);
+                for (k, t) in titles.iter().enumerate() {
+                    if ui.add(egui::Button::selectable(k == pick, short_label(t)).min_size(vec2(200.0, 22.0))).clicked() {
+                        chosen = Some(t.clone());
+                    }
+                }
+            });
+        });
+        if let Some(t) = &chosen {
+            // Replace what was typed after [[ with the name and the closing ]], cursor after it.
+            let mut new: String = chars[..*from].iter().collect();
+            new.push_str(t);
+            new.push_str("]]");
+            let after = chars[*to..].iter().collect::<String>();
+            let after = after.strip_prefix("]]").unwrap_or(&after).to_owned();
+            let cursor_at = new.chars().count();
+            new.push_str(&after);
+            text = new;
+            changed = true;
+            let mut state = out.state.clone();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(cursor_at))));
+            state.store(ui.ctx(), te_id);
+        }
+    }
+    let shown = if chosen.is_some() { 0 } else { titles.len() };
+    ui.data_mut(|d| d.insert_temp(ac_id, (pick, shown)));
+    if changed {
+        if let Some(n) = ed.board.note_mut(nid) {
+            n.text = text;
+        }
+        ed.mark_changed();
+    }
 }
 
 fn note_reader(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32, p: &crate::theme::Pal) {
@@ -1525,5 +1631,80 @@ fn note_reader(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32, p: &crate::the
         Some(crate::markdown::Target::Task(line)) => ed.toggle_note_task(nid, line),
         Some(crate::markdown::Target::Link(l)) => ed.follow_link(&l),
         None => {}
+    }
+}
+
+/// The Frames panel: the page's frames in slide order. Click one to go to it, reorder with the
+/// arrows, present from the start or from any frame.
+pub fn frames_ui(ui: &mut Ui, ed: &mut Editor) {
+    let p = pal(ui.ctx());
+    let frames = ed.board.frames(ed.page);
+    ui.horizontal(|ui| {
+        if ui.add_enabled(!frames.is_empty(), egui::Button::new("Present")).on_hover_text("Full screen, frame by frame (F5). Arrow keys move, Esc stops.").clicked() {
+            ed.start_present(0);
+        }
+        if ui.button("New frame").on_hover_text("The Frame tool (F): drag on the board, Shift keeps 16:9").clicked() {
+            ed.finish_edit();
+            ed.tool = Tool::Frame;
+        }
+    });
+    if frames.is_empty() {
+        ui.label(theme::secondary(ui, "No frames on this page. Frames mark areas of the board, and become slides when presenting. Use the Frame tool (F) or Add > Shapes > Frame."));
+        return;
+    }
+    ui.label(theme::secondary(ui, "In slide order. Double-click a name to rename it on the board."));
+    ui.add_space(4.0);
+    let mut swap = None;
+    let mut go = None;
+    let mut present = None;
+    let mut rename = None;
+    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for (k, id) in frames.iter().enumerate() {
+            let name = ed.board.get(*id).map(|o| o.label.clone()).unwrap_or_default();
+            let sel = ed.selection.contains(id);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                ui.add_sized([22.0, 22.0], egui::Label::new(RichText::new(format!("{}", k + 1)).size(11.0).color(p.text_secondary)));
+                let small = |ui: &mut Ui, t: &str, on: bool, tip: &str| ui.add_enabled(on, egui::Button::new(RichText::new(t).size(11.0)).frame(false).min_size(vec2(18.0, 22.0))).on_hover_text(tip).clicked();
+                let w = (ui.available_width() - 64.0).max(40.0);
+                let resp = ui.add(egui::Button::selectable(sel, short_label(if name.is_empty() { "Frame" } else { &name })).min_size(vec2(w, 22.0)));
+                if resp.double_clicked() {
+                    rename = Some(*id);
+                } else if resp.clicked() {
+                    go = Some(*id);
+                }
+                if small(ui, "▲", k > 0, "Earlier in the slideshow") {
+                    swap = Some((k, k - 1));
+                }
+                if small(ui, "▼", k + 1 < frames.len(), "Later in the slideshow") {
+                    swap = Some((k, k + 1));
+                }
+                if small(ui, "▶", true, "Present from here") {
+                    present = Some(k);
+                }
+            });
+        }
+    });
+    if let Some((a, b)) = swap {
+        let slide_of = |ed: &Editor, id: Id| if let Some(Kind::Frame { slide }) = ed.board.get(id).map(|o| &o.kind) { *slide } else { 0 };
+        let (sa, sb) = (slide_of(ed, frames[a]), slide_of(ed, frames[b]));
+        // Equal numbers (older boards) are spread out first so the swap changes the order.
+        let (sa, sb) = if sa == sb { (a as u32 + 1, b as u32 + 1) } else { (sa, sb) };
+        ed.mark_changed();
+        for (id, s) in [(frames[a], sb), (frames[b], sa)] {
+            if let Some(o) = ed.board.get_mut(id) {
+                o.kind = Kind::Frame { slide: s };
+            }
+        }
+    }
+    if let Some(id) = go {
+        ed.show_frame(id);
+    }
+    if let Some(id) = rename {
+        ed.show_frame(id);
+        ed.start_edit(id);
+    }
+    if let Some(k) = present {
+        ed.start_present(k);
     }
 }

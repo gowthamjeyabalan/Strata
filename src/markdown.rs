@@ -448,3 +448,19 @@ fn text(painter: &Painter, spans: &[Span], at: Pos2, width: f32, size: f32, stro
     painter.galley(at, g, ink);
     h
 }
+
+/// The `[[Name]]` links in a note's text, as written.
+pub fn wiki_links(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(a) = rest.find("[[") {
+        let after = &rest[a + 2..];
+        let Some(b) = after.find("]]") else { break };
+        let name = after[..b].trim();
+        if !name.is_empty() && !name.contains('\n') {
+            out.push(name.to_owned());
+        }
+        rest = &after[b + 2..];
+    }
+    out
+}

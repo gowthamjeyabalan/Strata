@@ -20,6 +20,7 @@ pub enum Tool {
     Line,
     Arrow,
     Polyline,
+    Frame,
     Rectangle,
     Ellipse,
     Node,
@@ -28,7 +29,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 15] = [
+    pub const ALL: [Tool; 16] = [
         Tool::Select,
         Tool::Hand,
         Tool::Pen,
@@ -39,6 +40,7 @@ impl Tool {
         Tool::Line,
         Tool::Arrow,
         Tool::Polyline,
+        Tool::Frame,
         Tool::Rectangle,
         Tool::Ellipse,
         Tool::Node,
@@ -58,6 +60,7 @@ impl Tool {
             Tool::Line => "Line",
             Tool::Arrow => "Arrow",
             Tool::Polyline => "Polyline",
+            Tool::Frame => "Frame",
             Tool::Rectangle => "Rectangle",
             Tool::Ellipse => "Ellipse",
             Tool::Node => "Flowchart box",
@@ -79,6 +82,7 @@ impl Tool {
             Tool::Line => L,
             Tool::Arrow => A,
             Tool::Polyline => U,
+            Tool::Frame => F,
             Tool::Rectangle => R,
             Tool::Ellipse => O,
             Tool::Node => N,
@@ -99,6 +103,7 @@ impl Tool {
             Tool::Line => "L",
             Tool::Arrow => "A",
             Tool::Polyline => "U",
+            Tool::Frame => "F",
             Tool::Rectangle => "R",
             Tool::Ellipse => "O",
             Tool::Node => "N",
@@ -180,6 +185,14 @@ pub fn paint_icon(p: &Painter, rect: Rect, tool: Tool, c: Color32, dot: Color32)
                 p.circle_filled(at(x, y), 1.5 * s, c);
             }
             p.circle_filled(at(16.5, 4.5), 1.7 * s, dot);
+        }
+        Tool::Frame => {
+            // A hash: the corners of a frame.
+            line(&[(6.0, 2.5), (6.0, 17.5)]);
+            line(&[(14.0, 2.5), (14.0, 17.5)]);
+            line(&[(2.5, 6.0), (17.5, 6.0)]);
+            line(&[(2.5, 14.0), (17.5, 14.0)]);
+            p.circle_filled(at(10.0, 10.0), 1.4 * s, dot);
         }
         Tool::Rectangle => {
             p.rect_stroke(Rect::from_min_max(at(3.5, 5.0), at(16.5, 15.0)), 1.5 * s, st, egui::StrokeKind::Middle);

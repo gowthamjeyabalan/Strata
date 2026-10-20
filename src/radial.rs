@@ -192,7 +192,7 @@ fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
                 let mut shapes: Vec<Child> = [Tool::Line, Tool::Arrow].into_iter().map(tool).collect();
                 shapes.push(Child { label: "Polyline (U)".into(), look: Look::Tool(Tool::Polyline), act: Act::Poly(false), current: poly && !ed.poly_curved, sub: Vec::new() });
                 shapes.push(Child { label: "Curve through points".into(), look: Look::Paint(paint_curve_icon), act: Act::Poly(true), current: poly && ed.poly_curved, sub: Vec::new() });
-                shapes.extend([Tool::Rectangle, Tool::Ellipse, Tool::Text].into_iter().map(tool));
+                shapes.extend([Tool::Rectangle, Tool::Ellipse, Tool::Text, Tool::Frame].into_iter().map(tool));
                 // Flowchart boxes are added like the "/" list does: connected to the selected node.
                 let flow: Vec<Child> = crate::insert::items()
                     .into_iter()

@@ -21,6 +21,7 @@ pub enum Tab {
     Flowchart,
     Calendar,
     Notes,
+    Frames,
     /// A note open to read and write, beside the board.
     Note(crate::board::Id),
     Properties,
@@ -47,7 +48,7 @@ struct Settings {
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 6;
+const DOCK_VERSION: u32 = 7;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
@@ -56,7 +57,7 @@ fn default_dock() -> DockState<Tab> {
     // the other panels are on the right.
     // Notes are listed on the left, like files in a notebook app; opened notes are tabs beside the board.
     let [board, _notes] = s.split_left(NodeIndex::root(), 0.17, vec![Tab::Notes]);
-    let [board, _panels] = s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Graph, Tab::History]);
+    let [board, _panels] = s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Frames, Tab::Graph, Tab::History]);
     s.split_below(board, 0.74, vec![Tab::Calendar]);
     d
 }
@@ -86,6 +87,8 @@ pub struct App {
     export: ExportSettings,
     /// Set while the "Save changes?" dialog is showing.
     ask_save: Option<Pending>,
+    /// Presenting last frame, to switch full screen on and off once.
+    was_presenting: bool,
     /// Frame timing, only when OVERLAY_PERF names a file to write it to.
     perf: Option<Perf>,
 }
@@ -174,6 +177,7 @@ impl App {
             closing: false,
             export: ExportSettings::default(),
             ask_save: None,
+            was_presenting: false,
             perf: Perf::from_env(),
         }
     }
@@ -293,6 +297,9 @@ impl App {
         if ev(cmd(Key::E)) {
             self.export.open = true;
         }
+        if ev(cmd(Key::K)) {
+            ed.palette = if ed.palette.is_some() { None } else { Some(crate::search::Palette { focus: true, ..Default::default() }) };
+        }
         // While a label is being typed, keys belong to it. (egui drops the text box's focus on Esc
         // before this runs, so check the edit itself too: Esc should only end the typing.)
         if typing || ed.is_editing() {
@@ -330,6 +337,9 @@ impl App {
         }
         if ev(cmd(Key::Num0)) {
             ed.reset_zoom();
+        }
+        if ev(KeyboardShortcut::new(Modifiers::NONE, Key::F5)) {
+            ed.start_present(0);
         }
         if ev(KeyboardShortcut::new(Modifiers::SHIFT, Key::Num1)) {
             ed.zoom_to_fit();
@@ -471,6 +481,7 @@ impl App {
                 }
                 ui.separator();
                 ui.switch(&mut self.ed.show_overview, "Overview (M)");
+                ui.switch(&mut self.ed.show_note_links, "Links between note cards").on_hover_text("Dotted lines join the cards of notes that link to each other with [[Name]].");
                 ui.switch(&mut self.ed.snapping, "Snap to items").on_hover_text("Lines items up with each other's edges, centres and gaps while you move or resize them. Hold Alt to skip it for one drag.");
                 ui.separator();
                 if ui.button("Reset panel layout").clicked() {
@@ -539,6 +550,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => "Tools",
             Tab::Calendar => "Calendar",
             Tab::Notes => "Notes",
+            Tab::Frames => "Frames",
             Tab::Note(id) => return self.ed.board.note(*id).map(|n| n.title()).unwrap_or_else(|| "Deleted note".into()).chars().take(28).collect::<String>().into(),
             Tab::Properties => "Properties",
             Tab::Layers => "Layers",
@@ -556,6 +568,7 @@ impl TabViewer for Viewer<'_> {
             }
             Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
             Tab::Notes => panels::notes_ui(ui, self.ed),
+            Tab::Frames => panels::frames_ui(ui, self.ed),
             Tab::Note(id) => panels::note_view(ui, self.ed, *id),
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
@@ -617,6 +630,17 @@ impl App {
     fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
 
+        // Presenting takes the whole window, full screen, until Esc.
+        let presenting = self.ed.presenting.is_some();
+        if presenting != self.was_presenting {
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(presenting));
+            self.was_presenting = presenting;
+        }
+        if presenting {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(egui::Color32::BLACK)).show(ui, |ui| self.ed.present_ui(ui));
+            return;
+        }
+
         // Closing with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && !self.closing {
             if self.ed.needs_save() {
@@ -654,7 +678,8 @@ impl App {
 
         let p = pal(&ctx);
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
-        // New items go on the current layer; the item list stays in layer order.
+        // New items go on the current page and layer; the item list stays in layer order.
+        self.ed.board.fix_pages(&mut self.ed.page);
         self.ed.board.fix_layers(&mut self.ed.active_layer);
         // The Calendar's chosen days hide or fade the other items.
         self.ed.apply_day_filter();
@@ -700,6 +725,9 @@ impl App {
         overview::show(&ctx, &mut self.ed);
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);
+        if let Some(c) = crate::search::show(&ctx, &mut self.ed) {
+            self.run_cmd(&ctx, c);
+        }
         export::window(&ctx, &mut self.ed, &mut self.export);
         self.save_dialog(&ctx);
 
@@ -712,6 +740,80 @@ impl App {
             let r = self.ed.canvas_rect.shrink(8.0);
             painter.rect_stroke(r, 10.0, egui::Stroke::new(2.0, p.accent), egui::StrokeKind::Inside);
             painter.text(r.center(), egui::Align2::CENTER_CENTER, "Drop to add to the board", egui::FontId::proportional(14.0), p.accent_text);
+        }
+    }
+
+    /// A command picked in search everything (Ctrl+K).
+    fn run_cmd(&mut self, ctx: &egui::Context, c: crate::search::Cmd) {
+        use crate::search::{Cmd, Panel};
+        let ed = &mut self.ed;
+        match c {
+            Cmd::NewBoard => self.request(ctx, Pending::New),
+            Cmd::Open => self.request(ctx, Pending::Open),
+            Cmd::Save => {
+                ed.save(false);
+            }
+            Cmd::SaveAs => {
+                ed.save(true);
+            }
+            Cmd::Export => self.export.open = true,
+            Cmd::InsertImage => ed.pick_images(),
+            Cmd::Undo => ed.undo(),
+            Cmd::Redo => ed.redo(),
+            Cmd::ZoomFit => ed.zoom_to_fit(),
+            Cmd::ActualSize => ed.reset_zoom(),
+            Cmd::Overview => ed.show_overview = !ed.show_overview,
+            Cmd::Snapping => ed.snapping = !ed.snapping,
+            Cmd::NoteLinks => ed.show_note_links = !ed.show_note_links,
+            Cmd::NewNote => {
+                ed.add_note("# New note\n\n", true);
+            }
+            Cmd::NewFolder => {
+                ed.add_folder();
+                if let Some(path) = self.dock.find_tab(&Tab::Notes) {
+                    let _ = self.dock.set_active_tab(path);
+                }
+            }
+            Cmd::NewPage => ed.add_page(),
+            Cmd::NewLayer => {
+                let (_, name) = ed.add_layer();
+                ed.say(format!("Added {name}; new items go on it"));
+            }
+            Cmd::Present => ed.start_present(0),
+            Cmd::Group => ed.group_selection(),
+            Cmd::Ungroup => ed.ungroup_selection(),
+            Cmd::Lock => ed.toggle_lock(),
+            Cmd::Duplicate => ed.duplicate(),
+            Cmd::Delete => ed.delete_selection(),
+            Cmd::SelectAll => ed.select_all(),
+            Cmd::Dark | Cmd::Light | Cmd::System => {
+                let a = match c {
+                    Cmd::Dark => Appearance::Dark,
+                    Cmd::Light => Appearance::Light,
+                    _ => Appearance::System,
+                };
+                self.appearance = a;
+                theme::set_appearance(ctx, a);
+            }
+            Cmd::ResetLayout => self.dock = default_dock(),
+            Cmd::Tool(t) => {
+                ed.finish_edit();
+                ed.tool = t;
+            }
+            Cmd::Show(p) => {
+                let tab = match p {
+                    Panel::Properties => Tab::Properties,
+                    Panel::Notes => Tab::Notes,
+                    Panel::Layers => Tab::Layers,
+                    Panel::Frames => Tab::Frames,
+                    Panel::Graph => Tab::Graph,
+                    Panel::History => Tab::History,
+                    Panel::Calendar => Tab::Calendar,
+                };
+                if let Some(path) = self.dock.find_tab(&tab) {
+                    let _ = self.dock.set_active_tab(path);
+                }
+            }
         }
     }
 

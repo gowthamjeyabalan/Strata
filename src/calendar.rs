@@ -160,12 +160,6 @@ pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
         }
     }
     if let Some(id) = pick {
-        if let Some(o) = ed.board.get(id) {
-            let c = o.rect().center();
-            ed.camera.look_at(ed.canvas_rect, c);
-        }
-        ed.finish_edit();
-        ed.selection = vec![id];
-        ed.selected_wire = None;
+        ed.go_to(id);
     }
 }

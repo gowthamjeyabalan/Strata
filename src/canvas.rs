@@ -17,6 +17,8 @@ const MAX_ZOOM: f32 = 16.0;
 const HIT_PX: f32 = 6.0;
 const PORT_PX: f32 = 4.5;
 const HANDLE_PX: f32 = 9.0;
+/// Height of the page buttons' strip under the board.
+const PAGE_STRIP: f32 = 34.0;
 /// How near the first point of a polyline a click closes it, in screen pixels.
 const CLOSE_PX: f32 = 8.0;
 
@@ -152,6 +154,16 @@ fn snap45(start: Pos2, end: Pos2) -> Pos2 {
     start + vec2(a.cos(), a.sin()) * d.length()
 }
 
+/// A frame dragged from `start` to `end`; with `slide` it keeps a 16:9 shape.
+fn frame_rect(start: Pos2, end: Pos2, slide: bool) -> Rect {
+    if !slide {
+        return Rect::from_two_pos(start, end);
+    }
+    let d = end - start;
+    let w = d.x.abs().max(d.y.abs() * 16.0 / 9.0);
+    Rect::from_two_pos(start, start + vec2(w * d.x.signum(), w * 9.0 / 16.0 * d.y.signum()))
+}
+
 fn box_rect(start: Pos2, end: Pos2, square: bool) -> Rect {
     let mut end = end;
     if square {
@@ -182,7 +194,7 @@ impl Editor {
             .objects
             .iter()
             .rev()
-            .filter(|o| Some(o.id) != except && !hidden.contains(&o.id) && !inner.contains(&o.id))
+            .filter(|o| Some(o.id) != except && !hidden.contains(&o.id) && !inner.contains(&o.id) && !o.is_frame())
             .find_map(|o| Side::ALL.into_iter().find(|s| o.port(*s).distance(w) <= r).map(|s| (o.id, s)))
     }
 
@@ -372,6 +384,19 @@ impl Editor {
         }
     }
 
+    /// A new frame, named and numbered after the page's last one, behind everything.
+    pub fn create_frame(&mut self, rect: Rect) {
+        self.mark_changed();
+        let page = self.page;
+        let slide = self.board.frames(page).iter().filter_map(|id| self.board.get(*id)).filter_map(|o| if let Kind::Frame { slide } = o.kind { Some(slide) } else { None }).max().map(|s| s + 1).unwrap_or(1);
+        let id = self.board.add(rect, Kind::Frame { slide }, Style::default());
+        if let Some(o) = self.board.get_mut(id) {
+            o.label = format!("Frame {slide}");
+        }
+        self.selection = vec![id];
+        self.selected_wire = None;
+    }
+
     fn create_box(&mut self, rect: Rect) {
         self.mark_changed();
         let mut style = self.style;
@@ -491,7 +516,17 @@ impl Editor {
                     self.selected_wire = None;
                     // Moving a group moves everything in it. Locked items stay where they are.
                     let unlocked: Vec<Id> = self.selection.iter().copied().filter(|id| !self.is_locked(*id)).collect();
-                    let ids = self.board.with_descendants(&unlocked);
+                    let mut ids = self.board.with_descendants(&unlocked);
+                    // A frame carries the items that lie inside it.
+                    let hidden = self.board.hidden_set();
+                    for f in unlocked.iter().filter_map(|id| self.board.get(*id)).filter(|o| o.is_frame()).map(|o| o.rect()).collect::<Vec<_>>() {
+                        let inside: Vec<Id> = self.board.objects.iter().filter(|o| !o.is_frame() && !hidden.contains(&o.id) && f.contains_rect(o.rect())).map(|o| o.id).collect();
+                        for id in self.board.with_descendants(&inside) {
+                            if !ids.contains(&id) {
+                                ids.push(id);
+                            }
+                        }
+                    }
                     let orig: Vec<(Id, Pos2)> = ids.iter().filter(|id| !self.is_locked(**id)).filter_map(|id| self.board.get(*id).map(|o| (*id, o.rect().min))).collect();
                     if orig.is_empty() {
                         self.say("Locked items cannot be moved. Unlock them first (Ctrl+L).");
@@ -511,7 +546,7 @@ impl Editor {
             Tool::Eraser => Drag::Erase { erased: self.erase_at(w) },
             Tool::Line | Tool::Arrow => Drag::Segment { start: w, end: w, arrow: self.tool == Tool::Arrow },
             Tool::Polyline => Drag::None,
-            Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text => Drag::Box { start: w, end: w },
+            Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text | Tool::Frame => Drag::Box { start: w, end: w },
             Tool::Connect => match self.port_hit(w, None) {
                 Some((id, side)) => Drag::Wire { from: id, from_side: Some(side), end: w },
                 None => match self.board.hit(w, tol) {
@@ -688,9 +723,11 @@ impl Editor {
                 }
             }
             Drag::Box { start, end } => {
-                let r = box_rect(start, end, mods.shift);
+                let r = if self.tool == Tool::Frame { frame_rect(start, end, mods.shift) } else { box_rect(start, end, mods.shift) };
                 if r.width() * zoom < 6.0 && r.height() * zoom < 6.0 {
                     self.click(start, mods);
+                } else if self.tool == Tool::Frame {
+                    self.create_frame(r);
                 } else if self.tool == Tool::Text {
                     let h = self.style.font_size * 1.4;
                     self.create_box(Rect::from_min_size(r.min, vec2(r.width().max(40.0), h)));
@@ -774,6 +811,8 @@ impl Editor {
                 let size = self.tool_shape().map(|s| s.default_size()).unwrap_or(vec2(140.0, 90.0));
                 self.create_box(Rect::from_center_size(w, size));
             }
+            // A click makes a 16:9 slide-sized frame.
+            Tool::Frame => self.create_frame(Rect::from_center_size(w, vec2(960.0, 540.0))),
             Tool::Polyline => self.poly_click(w, mods),
             Tool::Hand | Tool::Line | Tool::Arrow => {}
         }
@@ -821,7 +860,10 @@ impl Editor {
     pub fn canvas_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let p = pal(&ctx);
-        let rect = ui.available_rect_before_wrap();
+        let full = ui.available_rect_before_wrap();
+        // A strip along the bottom holds the page buttons; the board is the rest.
+        let strip = Rect::from_min_max(pos2(full.left(), full.bottom() - PAGE_STRIP), full.max);
+        let rect = Rect::from_min_max(full.min, pos2(full.right(), strip.top()));
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         self.canvas_rect = rect;
         self.canvas_visible = true;
@@ -1010,7 +1052,7 @@ impl Editor {
 
         // ── draw ──
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, p.canvas);
+        painter.rect_filled(rect, CornerRadius::ZERO, p.canvas);
         self.draw_grid(&painter, rect, p);
         let hovered = if matches!(self.tool, Tool::Select | Tool::Connect) && matches!(self.drag, Drag::None) {
             self.hover_world.and_then(|w| self.board.hit(w, self.tol()))
@@ -1037,6 +1079,111 @@ impl Editor {
         }
 
         self.edit_overlay(ui, origin, p);
+        self.page_strip(ui, strip, p);
+    }
+
+    /// Presenting: the current frame fills the screen. Arrow keys, Space, Page Up/Down or a click move
+    /// between frames; Esc stops.
+    pub fn present_ui(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let p = pal(&ctx);
+        let rect = ui.max_rect();
+        let resp = ui.allocate_rect(rect, Sense::click());
+        let frames = self.board.frames(self.page);
+        let Some(mut i) = self.presenting else { return };
+        if frames.is_empty() {
+            self.stop_present();
+            return;
+        }
+        let (next, prev, stop) = ui.input(|k| {
+            (
+                k.key_pressed(Key::ArrowRight) || k.key_pressed(Key::ArrowDown) || k.key_pressed(Key::Space) || k.key_pressed(Key::PageDown) || k.key_pressed(Key::Enter),
+                k.key_pressed(Key::ArrowLeft) || k.key_pressed(Key::ArrowUp) || k.key_pressed(Key::PageUp) || k.key_pressed(Key::Backspace),
+                k.key_pressed(Key::Escape),
+            )
+        });
+        if stop {
+            self.stop_present();
+            return;
+        }
+        if (next || resp.clicked()) && i + 1 < frames.len() {
+            i += 1;
+        }
+        if (prev || resp.secondary_clicked()) && i > 0 {
+            i -= 1;
+        }
+        i = i.min(frames.len() - 1);
+        self.presenting = Some(i);
+        let Some(fr) = self.board.get(frames[i]).map(|o| o.rect()) else { return };
+        // The frame, as large as the screen allows, in the middle.
+        self.camera.zoom = (rect.width() / fr.width().max(1.0)).min(rect.height() / fr.height().max(1.0));
+        self.camera.look_at(rect, fr.center());
+        self.canvas_rect = rect;
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::ZERO, Color32::BLACK);
+        let screen = self.camera.rect_to_screen(rect.min, fr);
+        painter.rect_filled(screen, CornerRadius::ZERO, p.canvas);
+        let inside = painter.with_clip_rect(screen);
+        let look = self.board.lookup();
+        self.paint_scene(&ctx, &inside, rect.min, &look);
+        painter.text(rect.right_bottom() - vec2(18.0, 14.0), egui::Align2::RIGHT_BOTTOM, format!("{} / {}", i + 1, frames.len()), FontId::proportional(12.0), Color32::from_gray(120));
+    }
+
+    /// The page buttons: click one to show it, double-click to rename it, + adds a page, and the ×
+    /// on a hovered page deletes it (with what is on it; undo brings it back).
+    fn page_strip(&mut self, ui: &mut Ui, strip: Rect, p: &Pal) {
+        ui.painter().rect_filled(strip, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, p.bg);
+        ui.painter().line_segment([strip.left_top(), strip.right_top()], Stroke::new(1.0, p.hairline));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(strip.shrink2(vec2(8.0, 5.0))).layout(egui::Layout::left_to_right(Align::Center)));
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+        let pages = self.board.pages.clone();
+        let mut switch = None;
+        let mut delete = None;
+        for pg in &pages {
+            let current = pg.id == self.page;
+            if let Some((rid, name)) = self.renaming_page.clone().filter(|(r, _)| *r == pg.id) {
+                let mut name = name;
+                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(110.0).id_salt(("page-name", rid)));
+                r.request_focus();
+                let done = r.lost_focus() || ui.input(|i| i.key_pressed(Key::Enter));
+                self.renaming_page = Some((rid, name.clone()));
+                if done {
+                    self.renaming_page = None;
+                    let name = name.trim().to_owned();
+                    if let Some(pp) = self.board.pages.iter_mut().find(|x| x.id == rid).filter(|x| !name.is_empty() && x.name != name) {
+                        pp.name = name;
+                        self.mark_changed();
+                    }
+                }
+                continue;
+            }
+            let text = egui::RichText::new(&pg.name).size(12.5).color(if current { p.text } else { p.text_secondary });
+            let resp = ui.add(egui::Button::selectable(current, text).min_size(vec2(64.0, 24.0)).corner_radius(CornerRadius::same(7)));
+            let count = self.board.objects.iter().filter(|o| o.page == pg.id && !o.is_group()).count();
+            let resp = resp.on_hover_text(format!("{}. Double-click to rename.", crate::editor::plural(count, "item", "items")));
+            if resp.double_clicked() {
+                self.renaming_page = Some((pg.id, pg.name.clone()));
+            } else if resp.clicked() {
+                switch = Some(pg.id);
+            }
+            // Delete, while the page is hovered (never the only page).
+            if pages.len() > 1 && (resp.hovered() || current) {
+                let x = ui.add(egui::Button::new(egui::RichText::new("×").size(12.0).color(p.text_secondary)).frame(false).min_size(vec2(14.0, 24.0)));
+                if x.on_hover_text("Delete this page and what is on it").clicked() {
+                    delete = Some(pg.id);
+                }
+            }
+        }
+        if ui.add(egui::Button::new(egui::RichText::new("+").size(14.0)).frame(false).min_size(vec2(24.0, 24.0))).on_hover_text("New page").clicked() {
+            self.add_page();
+        }
+        if let Some(id) = switch {
+            self.switch_page(id);
+        }
+        if let Some(id) = delete {
+            self.delete_page(id);
+        }
     }
 
     /// Items and connections, as they appear on the board and in exports. Items inside collapsed groups
@@ -1049,7 +1196,9 @@ impl Editor {
             self.textures.retain(|k, _| images.contains_key(k));
         }
         let mut text_heights = Vec::new();
-        for k in 0..self.board.objects.len() {
+        // Frames first, so they are always behind what is on them.
+        let order: Vec<usize> = (0..self.board.objects.len()).filter(|k| self.board.objects[*k].is_frame()).chain((0..self.board.objects.len()).filter(|k| !self.board.objects[*k].is_frame())).collect();
+        for k in order {
             let (id, kind_image) = {
                 let o = &self.board.objects[k];
                 (o.id, if let Kind::Image { image } = o.kind { Some(image) } else { None })
@@ -1072,7 +1221,44 @@ impl Editor {
             }
         }
         // Wires on top of objects so they are never hidden behind a group or an image.
+        self.draw_note_links(painter, origin, p, look);
         self.draw_wires(painter, origin, p, look);
+    }
+
+    /// Dotted lines between the cards of notes that link to each other with `[[Name]]`.
+    fn draw_note_links(&self, painter: &Painter, origin: Pos2, p: &Pal, look: &board::Lookup) {
+        if !self.show_note_links || self.presenting.is_some() || self.board.notes.len() < 2 {
+            return;
+        }
+        let mut cards: std::collections::HashMap<Id, Vec<Rect>> = std::collections::HashMap::new();
+        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id)) {
+            if let Kind::Note { note } = o.kind {
+                cards.entry(note).or_default().push(o.rect());
+            }
+        }
+        if cards.len() < 2 {
+            return;
+        }
+        let by_title: std::collections::HashMap<String, Id> = self.board.notes.iter().map(|n| (n.title().to_lowercase(), n.id)).collect();
+        let stroke = Stroke::new(1.5, p.accent.gamma_multiply(0.55));
+        for n in self.board.notes.iter().filter(|n| cards.contains_key(&n.id)) {
+            for link in crate::markdown::wiki_links(&n.text) {
+                let Some(to) = by_title.get(&link.to_lowercase()).filter(|t| **t != n.id) else { continue };
+                let Some(targets) = cards.get(to) else { continue };
+                for a in &cards[&n.id] {
+                    // To the nearest card of the linked note, edge to edge.
+                    let Some(b) = targets.iter().min_by(|x, y| x.center().distance(a.center()).total_cmp(&y.center().distance(a.center()))) else { continue };
+                    let (ca, cb) = (a.center(), b.center());
+                    let edge = |r: &Rect, from: Pos2, toward: Pos2| {
+                        let d = toward - from;
+                        let t = [(r.width() * 0.5) / d.x.abs().max(1e-3), (r.height() * 0.5) / d.y.abs().max(1e-3)].into_iter().fold(f32::MAX, f32::min).min(1.0);
+                        from + d * t
+                    };
+                    let (s, e) = (self.camera.to_screen(origin, edge(a, ca, cb)), self.camera.to_screen(origin, edge(b, cb, ca)));
+                    painter.extend(egui::Shape::dotted_line(&[s, e], stroke.color, 7.0, 1.4));
+                }
+            }
+        }
     }
 
     /// A soft highlighter behind each item from the days chosen in the Calendar.
@@ -1255,6 +1441,19 @@ impl Editor {
                     painter.galley(pos2(r.center().x, r.center().y - g.size().y * 0.5), g, text);
                 }
             }
+            Kind::Frame { .. } => {
+                // A soft panel with its name above the top-left corner. While presenting only the
+                // panel shows.
+                let fill = match o.style.fill_color {
+                    Some(c) if o.style.fill => fade(c.color(p)),
+                    _ => fade(p.bg_elevated.gamma_multiply(0.55)),
+                };
+                painter.rect(r, CornerRadius::same((6.0 * z).clamp(1.0, 12.0) as u8), fill, Stroke::new(1.0, if self.presenting.is_some() { Color32::TRANSPARENT } else { fade(p.hairline) }), StrokeKind::Inside);
+                if self.presenting.is_none() && !editing && !o.label.is_empty() {
+                    let color = if self.selection.contains(&o.id) { p.accent } else { p.text_secondary };
+                    painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, &o.label, FontId::proportional(12.0), color);
+                }
+            }
             Kind::Note { note } => {
                 // A card: the note, formatted, scrolled inside its frame.
                 let fill = match o.style.fill_color {
@@ -1361,7 +1560,7 @@ impl Editor {
             .collect();
         let selected: std::collections::HashSet<Id> = self.selection.iter().copied().collect();
         let clip = painter.clip_rect().expand(PORT_PX + 2.0);
-        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id) && !look.in_sketch(o.id)) {
+        for o in self.board.objects.iter().filter(|o| !look.hidden(o.id) && !look.in_sketch(o.id) && !o.is_frame()) {
             if !clip.intersects(self.camera.rect_to_screen(origin, o.rect())) {
                 continue;
             }
@@ -1464,7 +1663,7 @@ impl Editor {
             }
             Drag::Box { start, end } => {
                 let mods = painter.ctx().input(|i| i.modifiers);
-                let wr = box_rect(*start, *end, mods.shift);
+                let wr = if self.tool == Tool::Frame { frame_rect(*start, *end, mods.shift) } else { box_rect(*start, *end, mods.shift) };
                 let r = Rect::from_two_pos(to_s(wr.min), to_s(wr.max));
                 match self.tool_shape() {
                     Some(shape) => {
@@ -1519,6 +1718,7 @@ impl Editor {
             let (area, font, color, center) = match &o.kind {
                 Kind::Text => (Rect::from_min_size(r.min, vec2(r.width().max(40.0), r.height().max(20.0))), FontId::proportional(size), ink, false),
                 Kind::Shape { .. } => (r.shrink2(vec2(8.0 * z, 4.0 * z)), FontId::proportional(size), p.text, true),
+                Kind::Frame { .. } => (Rect::from_min_size(r.left_top() - vec2(0.0, 22.0), vec2(r.width().clamp(120.0, 320.0), 18.0)), FontId::proportional(12.0), p.text, false),
                 Kind::Group { sketch: false, .. } => {
                     let pos = group_name_pos(r, z, size);
                     (Rect::from_min_size(pos, vec2((r.width() - 24.0 * z).max(80.0), size * 1.3)), FontId::new(size, theme::semibold_family()), group_color(o, p), false)

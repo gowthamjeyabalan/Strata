@@ -14,6 +14,7 @@ mod markdown;
 mod overview;
 mod palettes;
 mod radial;
+mod search;
 mod panels;
 mod shapes;
 mod snap;

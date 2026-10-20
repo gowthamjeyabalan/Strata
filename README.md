@@ -49,6 +49,15 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Markdown notes: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
 - Place a note on the board as a card: it can be resized, scrolls inside itself, and connects, groups and layers like any item. The same note can have several cards.
 - Pasting markdown or dropping `.md` files onto the window makes notes.
+- Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names, and dotted lines join the cards of linked notes on the board (View > Links between note cards).
+
+**Pages, frames and presenting**
+- Several pages in one board, as a row of buttons under the board. Each page has its own items; notes are shared by all pages.
+- Frames mark named areas of a page (the Frame tool, F; Shift keeps 16:9) and carry what is inside them when moved. The Frames panel lists them in slide order.
+- Present (F5) shows the frames full screen one by one; arrow keys or a click move on, Esc returns.
+
+**Search everything**
+- Ctrl+K finds notes, text, comments and connection labels on every page, and frames, layers and pages, and runs any command or tool by name.
 
 **Calendar**
 - Every item records when it was made and each day it was changed, automatically. Boards with history get dates from it.
@@ -88,6 +97,8 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 | Ctrl+0, Shift+1 | Actual size, zoom to fit |
 | M | Show or hide the Overview |
 | Ctrl+E | Export an image |
+| Ctrl+K | Search everything, run a command |
+| F, F5 | Frame tool, present |
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | New, open, save, save as |
 
 Pan with the middle mouse button, the right mouse button on empty board, or hold Space and drag. Holding the right button on an item opens the radial menu. The mouse wheel zooms at the pointer.
@@ -110,6 +121,8 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
 | Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto Add, Tools, Width, Layer, Colour, Arrange or View opens an outer ring (Add's sections open a third): move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
 | Notes | New note starts one (in the folder picked in the list) and opens it in a tab; Write, Split and Read switch between the editor and the preview. Double-click a note in the list, or its card on the board, to open it. Click notes in the list to pick them (Ctrl-click for more) and press Delete to delete them. New folder makes a folder; double-click its name to rename it, drag notes onto it to move them in, and click its arrow to fold it. Holding the right button on a note in the list opens its ring: open, place on board, move to a folder, delete. On the board, a selected note card's ring has a Note section with the same. Place on board adds a card; The mouse wheel over a card scrolls it (Ctrl+wheel zooms). Click a checkbox on a card to tick it, or a link to follow it. Deleting a note also deletes its cards. |
+| Pages | Click a page button under the board to show it, double-click to rename it, + adds one, and the × beside the current page deletes it with what is on it (Ctrl+Z brings it back). Each page keeps its own view. |
+| Frames | Frames sit behind everything and are picked by their edge or name. Double-click the name to rename it. In the Frames panel, click a frame to go to it, use the arrows to change the slide order, and ▶ to present from it. |
 | Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
 | Panels | Calendar, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
 
@@ -144,6 +157,7 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/panels.rs`, `src/overview.rs` | Properties, Layers, Graph, History and the Overview |
 | `src/radial.rs` | The radial menu: tools, new items and actions on the selection |
 | `src/markdown.rs` | Reading and drawing notes' markdown |
+| `src/search.rs` | Search everything (Ctrl+K) |
 | `src/dates.rs`, `src/calendar.rs` | Dates on items and the Calendar |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 

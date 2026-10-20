@@ -305,6 +305,9 @@ pub enum Kind {
     Text,
     /// A card showing a note from the board's notes (written in the Notes panel), as markdown.
     Note { note: Id },
+    /// A named area of the board, drawn behind everything; a slide when presenting. `slide` orders
+    /// the frames of a page.
+    Frame { slide: u32 },
     /// A named, coloured frame around other objects. Its rect follows its members. A collapsed group
     /// hides its members and shows as one compact node; their connections attach to it instead.
     Group {
@@ -357,6 +360,7 @@ impl Kind {
             Kind::Shape { shape } => shape.name(),
             Kind::Text => "Text",
             Kind::Note { .. } => "Note",
+            Kind::Frame { .. } => "Frame",
             Kind::Group { sketch: true, .. } => "Sketch",
             Kind::Group { .. } => "Group",
         }
@@ -425,11 +429,14 @@ pub struct Object {
     /// Every day (`YYYY-MM-DD`) it was made or changed, oldest first.
     #[serde(default)]
     pub days: Vec<String>,
+    /// The page it is on. 0 until it is placed on one.
+    #[serde(default)]
+    pub page: Id,
 }
 
 impl Object {
     pub fn new(id: Id, rect: Rect, kind: Kind, label: String, style: Style) -> Self {
-        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0, created: String::new(), days: Vec::new() };
+        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0, created: String::new(), days: Vec::new(), page: 0 };
         o.set_rect(rect);
         o
     }
@@ -455,6 +462,9 @@ impl Object {
     }
     pub fn is_group(&self) -> bool {
         matches!(self.kind, Kind::Group { .. })
+    }
+    pub fn is_frame(&self) -> bool {
+        matches!(self.kind, Kind::Frame { .. })
     }
     pub fn is_sketch(&self) -> bool {
         matches!(self.kind, Kind::Group { sketch: true, .. })
@@ -492,6 +502,13 @@ impl Object {
             }
             // A sketch is hit through its strokes, never its empty box.
             Kind::Group { sketch: true, .. } => false,
+            // A frame is picked by its edge or its name above it, so what is inside stays easy to pick.
+            Kind::Frame { .. } => {
+                let r = self.rect();
+                let edge = r.expand(tol).contains(p) && !r.shrink(tol).contains(p);
+                let title = p.y <= r.top() && p.y >= r.top() - tol * 4.0 && p.x >= r.left() && p.x <= r.left() + r.width().min(tol * 40.0);
+                edge || title
+            }
             _ => self.rect().expand(tol).contains(p),
         }
     }
@@ -570,6 +587,9 @@ pub struct Board {
     /// Folders for notes in the Notes list.
     #[serde(default)]
     pub folders: Vec<Folder>,
+    /// Pages, in the order of their buttons. Every item is on one; notes are shared by all.
+    #[serde(default)]
+    pub pages: Vec<Page>,
     /// Items left out by the calendar's day filter: treated as hidden. Set every frame, never saved.
     #[serde(skip)]
     pub veil: std::collections::HashSet<Id>,
@@ -586,6 +606,12 @@ pub struct Note {
     /// The folder it is in; 0 for none.
     #[serde(default)]
     pub folder: Id,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Page {
+    pub id: Id,
+    pub name: String,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -674,6 +700,23 @@ impl Board {
 
     // ── layers ──
 
+    /// Make sure there is a page, and put objects that are on none onto `current`.
+    pub fn fix_pages(&mut self, current: &mut Id) {
+        if self.pages.is_empty() {
+            let id = self.new_id();
+            self.pages.push(Page { id, name: "Page 1".into() });
+        }
+        if !self.pages.iter().any(|p| p.id == *current) {
+            *current = self.pages[0].id;
+        }
+        let pages: Vec<Id> = self.pages.iter().map(|p| p.id).collect();
+        for o in &mut self.objects {
+            if !pages.contains(&o.page) {
+                o.page = *current;
+            }
+        }
+    }
+
     /// Make sure there is a layer, put objects that are on none onto `active`, and keep the object list
     /// in layer order (back layer first). Cheap when nothing needs doing.
     pub fn fix_layers(&mut self, active: &mut Id) {
@@ -693,6 +736,13 @@ impl Board {
         if !self.objects.windows(2).all(|w| rank[&w[0].layer] <= rank[&w[1].layer]) {
             self.objects.sort_by_key(|o| rank[&o.layer]);
         }
+    }
+
+    /// The frames of a page, in slide order.
+    pub fn frames(&self, page: Id) -> Vec<Id> {
+        let mut f: Vec<(u32, Id)> = self.objects.iter().filter(|o| o.page == page).filter_map(|o| if let Kind::Frame { slide } = o.kind { Some((slide, o.id)) } else { None }).collect();
+        f.sort();
+        f.into_iter().map(|(_, id)| id).collect()
     }
 
     /// Put objects (and everything inside groups among them) on a layer.
@@ -871,9 +921,10 @@ impl Board {
         }
         let gid = self.new_id();
         let at = self.objects.iter().position(|o| ids.contains(&o.id)).unwrap_or(0);
-        let layer = self.objects.get(at).map(|o| o.layer).unwrap_or(0);
+        let (layer, page) = self.objects.get(at).map(|o| (o.layer, o.page)).unwrap_or((0, 0));
         let mut g = Object::new(gid, Rect::ZERO, Kind::Group { members: ids, collapsed: false, sketch }, if sketch { String::new() } else { "Group".into() }, style);
         g.layer = layer;
+        g.page = page;
         self.objects.insert(at, g);
         if let Some(p) = common {
             if let Some(Object { kind: Kind::Group { members, .. }, .. }) = self.get_mut(p) {

@@ -10,7 +10,7 @@
 //!
 //! Undo and redo move along the tree; the History panel jumps to any state.
 
-use crate::board::{Board, Folder, Id, Kind, Layer, Note, Object, Wire};
+use crate::board::{Board, Folder, Id, Kind, Layer, Note, Object, Page, Wire};
 use crate::board::ImageAsset;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -42,6 +42,7 @@ pub struct Snapshot {
     pub layers: Vec<Layer>,
     pub notes: Vec<Note>,
     pub folders: Vec<Folder>,
+    pub pages: Vec<Page>,
 }
 
 impl Snapshot {
@@ -52,12 +53,12 @@ impl Snapshot {
             Some(a) if ***a == *o => Arc::clone(a),
             _ => Arc::new(o.clone()),
         });
-        Snapshot { objects: objects.collect(), wires: b.wires.clone(), images: b.images.clone(), next_id: b.next_id, layers: b.layers.clone(), notes: b.notes.clone(), folders: b.folders.clone() }
+        Snapshot { objects: objects.collect(), wires: b.wires.clone(), images: b.images.clone(), next_id: b.next_id, layers: b.layers.clone(), notes: b.notes.clone(), folders: b.folders.clone(), pages: b.pages.clone() }
     }
 
     /// An editable board from this state.
     pub fn to_board(&self) -> Board {
-        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), notes: self.notes.clone(), folders: self.folders.clone(), veil: Default::default() }
+        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), notes: self.notes.clone(), folders: self.folders.clone(), pages: self.pages.clone(), veil: Default::default() }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -73,6 +74,7 @@ pub trait View {
     fn layer_list(&self) -> &[Layer];
     fn note_list(&self) -> &[Note];
     fn folder_list(&self) -> &[Folder];
+    fn page_list(&self) -> &[Page];
 }
 
 impl View for Board {
@@ -91,6 +93,9 @@ impl View for Board {
     fn folder_list(&self) -> &[Folder] {
         &self.folders
     }
+    fn page_list(&self) -> &[Page] {
+        &self.pages
+    }
 }
 
 impl View for Snapshot {
@@ -108,6 +113,9 @@ impl View for Snapshot {
     }
     fn folder_list(&self) -> &[Folder] {
         &self.folders
+    }
+    fn page_list(&self) -> &[Page] {
+        &self.pages
     }
 }
 
@@ -207,6 +215,8 @@ pub fn describe(a: &impl View, b: &impl View) -> Option<Change> {
         l
     } else if let Some(l) = describe_folders(a.folder_list(), b.folder_list()) {
         l
+    } else if let Some(l) = describe_pages(a.page_list(), b.page_list()) {
+        l
     } else if let Some(l) = describe_edit(&ao, &bo, aw, bw, &a_obj) {
         l
     } else {
@@ -251,6 +261,23 @@ fn describe_notes(a: &[Note], b: &[Note]) -> Option<String> {
     b.iter().find(|n| a.iter().any(|x| x.id == n.id && x.folder != n.folder)).map(|n| format!("Moved {}", named(n)))
 }
 
+/// Pages added, renamed, reordered or deleted. Getting a first page (older boards) is not a change.
+fn describe_pages(a: &[Page], b: &[Page]) -> Option<String> {
+    if a == b || a.is_empty() {
+        return None;
+    }
+    if let Some(p) = b.iter().find(|p| !a.iter().any(|x| x.id == p.id)) {
+        return Some(format!("Added page \"{}\"", p.name));
+    }
+    if let Some(p) = a.iter().find(|p| !b.iter().any(|x| x.id == p.id)) {
+        return Some(format!("Deleted page \"{}\"", p.name));
+    }
+    if let Some(p) = b.iter().find(|p| a.iter().any(|x| x.id == p.id && x.name != p.name)) {
+        return Some(format!("Renamed page \"{}\"", p.name));
+    }
+    Some("Reordered pages".to_owned())
+}
+
 /// Note folders made, renamed or deleted.
 fn describe_folders(a: &[Folder], b: &[Folder]) -> Option<String> {
     if a == b {
@@ -282,6 +309,9 @@ fn describe_edit(ao: &[&Object], bo: &[&Object], aw: &[Wire], bw: &[Wire], a_obj
     }
     if let Some((p, o)) = first(&|p, o| p.label != o.label) {
         return Some(if p.label.is_empty() { format!("Named {}", name_of(o)) } else { format!("Edited {}", name_of(o)) });
+    }
+    if let Some((_, o)) = first(&|p, o| p.page != o.page && p.page != 0) {
+        return Some(format!("Moved {} to another page", name_of(o)));
     }
     if let Some((_, o)) = first(&|p, o| p.layer != o.layer && p.layer != 0) {
         return Some(format!("Moved {} to another layer", name_of(o)));
@@ -560,6 +590,7 @@ impl History {
                 layers: s.board.layers.clone(),
                 notes: s.board.notes.clone(),
                 folders: s.board.folders.clone(),
+                pages: s.board.pages.clone(),
             });
         }
         HistoryFile { objects, states, branches: self.branches.clone(), current: self.current }
@@ -586,7 +617,7 @@ impl History {
                 .iter()
                 .filter_map(|o| if let Kind::Image { image } = o.kind { images.get(&image).map(|a| (image, a.clone())) } else { None })
                 .collect();
-            let board = Snapshot { objects, wires: s.wires, images: imgs, next_id: s.next_id, layers: s.layers, notes: s.notes, folders: s.folders };
+            let board = Snapshot { objects, wires: s.wires, images: imgs, next_id: s.next_id, layers: s.layers, notes: s.notes, folders: s.folders, pages: s.pages };
             states.push(State { id: s.id, parent: s.parent, branch: s.branch, time: s.time, label: s.label, board });
         }
         let h = History { states, branches: f.branches, current: f.current, redo_to: HashMap::new() };
@@ -617,6 +648,8 @@ pub struct StateFile {
     pub notes: Vec<Note>,
     #[serde(default)]
     pub folders: Vec<Folder>,
+    #[serde(default)]
+    pub pages: Vec<Page>,
 }
 
 #[derive(Serialize, Deserialize)]
