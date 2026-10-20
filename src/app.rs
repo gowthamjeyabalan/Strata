@@ -21,6 +21,8 @@ pub enum Tab {
     Flowchart,
     Calendar,
     Notes,
+    /// A note open to read and write, beside the board.
+    Note(crate::board::Id),
     Properties,
     Layers,
     Graph,
@@ -45,14 +47,16 @@ struct Settings {
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 5;
+const DOCK_VERSION: u32 = 6;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
     let s = d.main_surface_mut();
     // The board keeps most of the window (the tools float over it), the Calendar sits under it, and
     // the other panels are on the right.
-    let [board, _panels] = s.split_right(NodeIndex::root(), 0.8, vec![Tab::Properties, Tab::Notes, Tab::Layers, Tab::Graph, Tab::History]);
+    // Notes are listed on the left, like files in a notebook app; opened notes are tabs beside the board.
+    let [board, _notes] = s.split_left(NodeIndex::root(), 0.17, vec![Tab::Notes]);
+    let [board, _panels] = s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Graph, Tab::History]);
     s.split_below(board, 0.74, vec![Tab::Calendar]);
     d
 }
@@ -369,7 +373,13 @@ impl App {
         }
         ctx.input(|i| {
             if i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace) {
-                ed.delete_selection();
+                // The Notes list, if it was clicked last; otherwise the board.
+                if ed.notes_focus && !ed.notes_sel.is_empty() {
+                    let ids = ed.notes_sel.clone();
+                    ed.delete_notes(&ids);
+                } else {
+                    ed.delete_selection();
+                }
             }
             if i.key_pressed(Key::Escape) && ed.eyedropper.take().is_some() {
                 // Escape only cancels the eyedropper.
@@ -529,6 +539,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => "Tools",
             Tab::Calendar => "Calendar",
             Tab::Notes => "Notes",
+            Tab::Note(id) => return self.ed.board.note(*id).map(|n| n.title()).unwrap_or_else(|| "Deleted note".into()).chars().take(28).collect::<String>().into(),
             Tab::Properties => "Properties",
             Tab::Layers => "Layers",
             Tab::Graph => "Graph",
@@ -545,6 +556,7 @@ impl TabViewer for Viewer<'_> {
             }
             Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
             Tab::Notes => panels::notes_ui(ui, self.ed),
+            Tab::Note(id) => panels::note_view(ui, self.ed, *id),
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
             Tab::Graph => panels::graph_ui(ui, self.ed),
@@ -552,8 +564,8 @@ impl TabViewer for Viewer<'_> {
         }
     }
 
-    fn is_closeable(&self, _tab: &Tab) -> bool {
-        false
+    fn is_closeable(&self, tab: &Tab) -> bool {
+        matches!(tab, Tab::Note(_))
     }
 
     fn scroll_bars(&self, _tab: &Tab) -> [bool; 2] {
@@ -567,7 +579,7 @@ impl TabViewer for Viewer<'_> {
                 s.tab_body.inner_margin = Margin::ZERO;
                 Some(s)
             }
-            Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => {
+            Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart | Tab::Note(_) => {
                 let mut s = global.clone();
                 s.tab_body.inner_margin = Margin::symmetric(8, 8);
                 Some(s)
@@ -626,7 +638,7 @@ impl App {
             let (notes, images): (Vec<PathBuf>, Vec<PathBuf>) = rest.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")));
             for (k, path) in notes.iter().enumerate() {
                 if let Ok(text) = std::fs::read_to_string(path) {
-                    let note = self.ed.add_note(&text);
+                    let note = self.ed.add_note(&text, false);
                     self.ed.place_note(note, at + egui::vec2(32.0, 32.0) * k as f32);
                 }
             }
@@ -646,23 +658,44 @@ impl App {
         self.ed.board.fix_layers(&mut self.ed.active_layer);
         // The Calendar's chosen days hide or fade the other items.
         self.ed.apply_day_filter();
+        self.ed.canvas_visible = false;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| {
             let style = theme::dock_style(ui.ctx());
             DockArea::new(&mut self.dock)
                 .style(style)
-                .show_close_buttons(false)
+                .show_close_buttons(true)
                 .show_leaf_close_all_buttons(false)
                 .show_leaf_collapse_buttons(false)
                 .show_inside(ui, &mut Viewer { ed: &mut self.ed });
         });
 
         // The radial menu's Properties, and opening a note, bring that panel to the front.
-        for (want, tab) in [(std::mem::take(&mut self.ed.want_properties), Tab::Properties), (std::mem::take(&mut self.ed.want_notes), Tab::Notes)] {
-            if want {
-                if let Some(path) = self.dock.find_tab(&tab) {
-                    let _ = self.dock.set_active_tab(path);
-                }
+        if std::mem::take(&mut self.ed.want_properties) {
+            if let Some(path) = self.dock.find_tab(&Tab::Properties) {
+                let _ = self.dock.set_active_tab(path);
             }
+        }
+        // A note to open goes in a tab beside the board (or comes to the front if already open).
+        if let Some(id) = self.ed.open_note.take() {
+            let tab = Tab::Note(id);
+            if let Some(path) = self.dock.find_tab(&tab) {
+                let _ = self.dock.set_active_tab(path);
+            } else if let Some(path) = self.dock.find_tab(&Tab::Board) {
+                if let Ok(leaf) = self.dock.leaf_mut(path.node_path()) {
+                    leaf.append_tab(tab);
+                    let last = leaf.tabs.len() - 1;
+                    let _ = leaf.set_active_tab(last);
+                }
+            } else {
+                self.dock.push_to_focused_leaf(tab);
+            }
+        }
+        // Tabs of deleted notes close.
+        let notes: Vec<crate::board::Id> = self.ed.board.notes.iter().map(|n| n.id).collect();
+        self.dock.retain_tabs(|t| !matches!(t, Tab::Note(id) if !notes.contains(id)));
+        // A ring opened on the Notes list.
+        if self.ed.radial.as_ref().is_some_and(|r| r.from_list()) {
+            crate::radial::update(&mut self.ed, &ctx);
         }
         overview::show(&ctx, &mut self.ed);
         crate::insert::show(&ctx, &mut self.ed);

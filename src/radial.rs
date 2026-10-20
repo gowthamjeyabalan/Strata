@@ -36,6 +36,8 @@ pub struct Radial {
     world: Pos2,
     /// Opened on an item (new items then go beside the selection) rather than on empty board.
     on_item: bool,
+    /// Opened on a note in the Notes list: the ring is that note's options.
+    note: Option<Id>,
     opened: Instant,
     /// The wedge whose outer ring is showing.
     sub: Option<usize>,
@@ -53,6 +55,10 @@ enum Act {
     New(NewItem),
     NewNote,
     PlaceNote(Id),
+    OpenNote(Id),
+    DeleteNote(Id),
+    /// Move a note (and the others picked with it) into a folder; 0 for none.
+    NoteFolder(Id, Id),
     Tool(Tool),
     /// The polyline tool, drawing straight segments or a curve.
     Poly(bool),
@@ -125,7 +131,14 @@ struct Item {
 
 impl Radial {
     pub fn new(center: Pos2, world: Pos2, on_item: bool) -> Self {
-        Radial { center, world, on_item, opened: Instant::now(), sub: None, sub2: None, hot: Hot::None, sticky: false }
+        Radial { center, world, on_item, note: None, opened: Instant::now(), sub: None, sub2: None, hot: Hot::None, sticky: false }
+    }
+    /// The ring for a note in the Notes list. Cards placed from it go at `world`.
+    pub fn for_note(center: Pos2, world: Pos2, note: Id) -> Self {
+        Radial { note: Some(note), ..Radial::new(center, world, false) }
+    }
+    pub fn from_list(&self) -> bool {
+        self.note.is_some()
     }
     /// Open and waiting for a click (after a quick right-click).
     pub fn sticky(mut self) -> Self {
@@ -136,17 +149,37 @@ impl Radial {
 
 /// The ring for the current selection, clockwise from the top: making things first, then what to do
 /// with the selection. Layers sit on the right so their names run outward without overlapping.
-fn items(ed: &Editor) -> Vec<Item> {
+fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
     let any = !ed.selection.is_empty();
+    let one = |label: &str, icon: Icon, act: Act, enabled: bool| Item { label: label.into(), icon, enabled, act: Some(act), children: Vec::new() };
+    // On a note in the Notes list: just that note's options.
+    if let Some(n) = r.note {
+        let here = ed.board.note(n).map(|x| x.folder).unwrap_or(0);
+        let mut folders = vec![Child { label: "Out of its folder".into(), look: Look::Chip("No folder".into()), act: Act::NoteFolder(n, 0), current: here == 0, sub: Vec::new() }];
+        folders.extend(ed.board.folders.iter().map(|f| Child { label: format!("Move to {}", f.name), look: Look::Chip(f.name.clone()), act: Act::NoteFolder(n, f.id), current: here == f.id, sub: Vec::new() }));
+        return vec![
+            one("Open", Icon::Note, Act::OpenNote(n), true),
+            one("Place on board", Icon::New, Act::PlaceNote(n), true),
+            Item { label: "Move to folder".into(), icon: Icon::Layers, enabled: !ed.board.folders.is_empty(), act: None, children: folders },
+            one("Delete note", Icon::Delete, Act::DeleteNote(n), true),
+        ];
+    }
+    // A selected note card adds a Note section: open it, another card, delete the note itself.
+    let card_note = match ed.selection[..] {
+        [id] => match ed.board.get(id).map(|o| &o.kind) {
+            Some(board::Kind::Note { note }) => Some(*note),
+            _ => None,
+        },
+        _ => None,
+    };
     let first = ed.selection.first().and_then(|id| ed.board.get(*id));
     let all_locked = !ed.selection.is_empty() && ed.selection.iter().all(|id| ed.is_locked(*id));
     let layer = first.map(|o| o.layer);
     let ink = Some(first.map(|o| o.style.ink).unwrap_or(ed.style.ink));
     let groups = ed.any_group_selected();
     let sketch = ed.selection.len() == 1 && first.is_some_and(|o| o.is_sketch());
-    let one = |label: &str, icon: Icon, act: Act, enabled: bool| Item { label: label.into(), icon, enabled, act: Some(act), children: Vec::new() };
     let add_label = if ed.selection.len() == 1 { "Add, connected" } else { "Add" };
-    vec![
+    let mut list = vec![
         Item {
             label: add_label.into(),
             icon: Icon::New,
@@ -223,7 +256,7 @@ fn items(ed: &Editor) -> Vec<Item> {
                 Child { label: "Send to back".into(), look: Look::Icon(Icon::Back), act: Act::Back, current: false, sub: Vec::new() },
             ],
         },
-        one("Delete", Icon::Delete, Act::Delete, any && !all_locked),
+        one(if card_note.is_some() { "Remove card" } else { "Delete" }, Icon::Delete, Act::Delete, any && !all_locked),
         one("Duplicate", Icon::Duplicate, Act::Duplicate, any),
         one(if all_locked { "Unlock" } else { "Lock" }, if all_locked { Icon::Unlock } else { Icon::Lock }, Act::Lock, any),
         if groups {
@@ -243,7 +276,18 @@ fn items(ed: &Editor) -> Vec<Item> {
             ],
         },
         one("Properties", Icon::Properties, Act::Properties, true),
-    ]
+    ];
+    if let Some(n) = card_note {
+        let leaf = |label: &str, icon: Icon, act: Act| Child { label: label.into(), look: Look::Icon(icon), act, current: false, sub: Vec::new() };
+        list.insert(1, Item {
+            label: "Note".into(),
+            icon: Icon::Note,
+            enabled: true,
+            act: None,
+            children: vec![leaf("Open the note", Icon::Note, Act::OpenNote(n)), leaf("Another card", Icon::New, Act::PlaceNote(n)), leaf("Delete the note and its cards", Icon::Delete, Act::DeleteNote(n))],
+        });
+    }
+    list
 }
 
 fn wedge_angle(i: usize, n: usize) -> f32 {
@@ -334,7 +378,7 @@ pub fn update(ed: &mut Editor, ctx: &egui::Context) {
     let Some(mut r) = ed.radial.take() else { return };
     let p = pal(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("radial")));
-    let list = items(ed);
+    let list = items(ed, &r);
     let n = list.len();
     let (ptr, sec_down, sec_released, prim_pressed, sec_pressed, esc) = ctx.input(|i| {
         (i.pointer.hover_pos(), i.pointer.secondary_down(), i.pointer.secondary_released(), i.pointer.primary_pressed(), i.pointer.secondary_pressed(), i.key_pressed(egui::Key::Escape))
@@ -464,12 +508,20 @@ fn run(ed: &mut Editor, a: Act, r: &Radial) {
     match a {
         Act::Open => {}
         Act::NewNote => {
-            let note = ed.add_note("# New note\n\n");
+            let note = ed.add_note("# New note\n\n", true);
             ed.place_note(note, at);
         }
         Act::PlaceNote(note) => {
             ed.place_note(note, at);
-            ed.open_note = Some(note);
+        }
+        Act::OpenNote(note) => ed.open_note = Some(note),
+        Act::DeleteNote(note) => {
+            let ids = if ed.notes_sel.contains(&note) { ed.notes_sel.clone() } else { vec![note] };
+            ed.delete_notes(&ids);
+        }
+        Act::NoteFolder(note, folder) => {
+            let ids = if ed.notes_sel.contains(&note) { ed.notes_sel.clone() } else { vec![note] };
+            ed.move_notes(&ids, folder);
         }
         Act::New(item) => {
             // Like the "/" list: beside the selected node and connected to it, or where the ring was

@@ -10,7 +10,7 @@
 //!
 //! Undo and redo move along the tree; the History panel jumps to any state.
 
-use crate::board::{Board, Id, Kind, Layer, Note, Object, Wire};
+use crate::board::{Board, Folder, Id, Kind, Layer, Note, Object, Wire};
 use crate::board::ImageAsset;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -41,6 +41,7 @@ pub struct Snapshot {
     pub next_id: Id,
     pub layers: Vec<Layer>,
     pub notes: Vec<Note>,
+    pub folders: Vec<Folder>,
 }
 
 impl Snapshot {
@@ -51,12 +52,12 @@ impl Snapshot {
             Some(a) if ***a == *o => Arc::clone(a),
             _ => Arc::new(o.clone()),
         });
-        Snapshot { objects: objects.collect(), wires: b.wires.clone(), images: b.images.clone(), next_id: b.next_id, layers: b.layers.clone(), notes: b.notes.clone() }
+        Snapshot { objects: objects.collect(), wires: b.wires.clone(), images: b.images.clone(), next_id: b.next_id, layers: b.layers.clone(), notes: b.notes.clone(), folders: b.folders.clone() }
     }
 
     /// An editable board from this state.
     pub fn to_board(&self) -> Board {
-        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), notes: self.notes.clone(), veil: Default::default() }
+        Board { objects: self.objects.iter().map(|o| (**o).clone()).collect(), wires: self.wires.clone(), images: self.images.clone(), next_id: self.next_id, layers: self.layers.clone(), notes: self.notes.clone(), folders: self.folders.clone(), veil: Default::default() }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -71,6 +72,7 @@ pub trait View {
     fn wire_list(&self) -> &[Wire];
     fn layer_list(&self) -> &[Layer];
     fn note_list(&self) -> &[Note];
+    fn folder_list(&self) -> &[Folder];
 }
 
 impl View for Board {
@@ -86,6 +88,9 @@ impl View for Board {
     fn note_list(&self) -> &[Note] {
         &self.notes
     }
+    fn folder_list(&self) -> &[Folder] {
+        &self.folders
+    }
 }
 
 impl View for Snapshot {
@@ -100,6 +105,9 @@ impl View for Snapshot {
     }
     fn note_list(&self) -> &[Note] {
         &self.notes
+    }
+    fn folder_list(&self) -> &[Folder] {
+        &self.folders
     }
 }
 
@@ -197,6 +205,8 @@ pub fn describe(a: &impl View, b: &impl View) -> Option<Change> {
         l
     } else if let Some(l) = describe_notes(a.note_list(), b.note_list()) {
         l
+    } else if let Some(l) = describe_folders(a.folder_list(), b.folder_list()) {
+        l
     } else if let Some(l) = describe_edit(&ao, &bo, aw, bw, &a_obj) {
         l
     } else {
@@ -235,7 +245,24 @@ fn describe_notes(a: &[Note], b: &[Note]) -> Option<String> {
     if let Some(n) = a.iter().find(|n| !b.iter().any(|x| x.id == n.id)) {
         return Some(format!("Deleted {}", named(n)));
     }
-    b.iter().find(|n| a.iter().any(|x| x.id == n.id && x.text != n.text)).map(|n| format!("Edited {}", named(n)))
+    if let Some(n) = b.iter().find(|n| a.iter().any(|x| x.id == n.id && x.text != n.text)) {
+        return Some(format!("Edited {}", named(n)));
+    }
+    b.iter().find(|n| a.iter().any(|x| x.id == n.id && x.folder != n.folder)).map(|n| format!("Moved {}", named(n)))
+}
+
+/// Note folders made, renamed or deleted.
+fn describe_folders(a: &[Folder], b: &[Folder]) -> Option<String> {
+    if a == b {
+        return None;
+    }
+    if let Some(f) = b.iter().find(|f| !a.iter().any(|x| x.id == f.id)) {
+        return Some(format!("Added folder \"{}\"", f.name));
+    }
+    if let Some(f) = a.iter().find(|f| !b.iter().any(|x| x.id == f.id)) {
+        return Some(format!("Deleted folder \"{}\"", f.name));
+    }
+    b.iter().find(|f| a.iter().any(|x| x.id == f.id && x.name != f.name)).map(|f| format!("Renamed folder \"{}\"", f.name))
 }
 
 /// Same items and connections, something about them changed.
@@ -532,6 +559,7 @@ impl History {
                 next_id: s.board.next_id,
                 layers: s.board.layers.clone(),
                 notes: s.board.notes.clone(),
+                folders: s.board.folders.clone(),
             });
         }
         HistoryFile { objects, states, branches: self.branches.clone(), current: self.current }
@@ -558,7 +586,7 @@ impl History {
                 .iter()
                 .filter_map(|o| if let Kind::Image { image } = o.kind { images.get(&image).map(|a| (image, a.clone())) } else { None })
                 .collect();
-            let board = Snapshot { objects, wires: s.wires, images: imgs, next_id: s.next_id, layers: s.layers, notes: s.notes };
+            let board = Snapshot { objects, wires: s.wires, images: imgs, next_id: s.next_id, layers: s.layers, notes: s.notes, folders: s.folders };
             states.push(State { id: s.id, parent: s.parent, branch: s.branch, time: s.time, label: s.label, board });
         }
         let h = History { states, branches: f.branches, current: f.current, redo_to: HashMap::new() };
@@ -587,6 +615,8 @@ pub struct StateFile {
     pub layers: Vec<Layer>,
     #[serde(default)]
     pub notes: Vec<Note>,
+    #[serde(default)]
+    pub folders: Vec<Folder>,
 }
 
 #[derive(Serialize, Deserialize)]

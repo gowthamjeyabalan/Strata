@@ -1205,127 +1205,325 @@ pub fn graph_ui(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
-/// The Notes panel: every note on the board, then the open one, written in markdown with a preview.
-pub fn notes_ui(ui: &mut Ui, ed: &mut Editor) {
-    let p = pal(ui.ctx());
-    // Selecting a note's card opens that note here.
-    if let [id] = ed.selection[..] {
-        if let Some(Kind::Note { note }) = ed.board.get(id).map(|o| &o.kind) {
-            ed.open_note = Some(*note);
-        }
-    }
-    ui.horizontal(|ui| {
-        if ui.button("New note").clicked() {
-            ed.add_note("# New note\n\n");
-        }
-        ui.add(egui::TextEdit::singleline(&mut ed.note_query).hint_text("Search notes").desired_width(ui.available_width()));
-    });
-    ui.add_space(4.0);
-
-    // ── the list ──
-    let q = ed.note_query.trim().to_lowercase();
-    let rows: Vec<(Id, String, usize)> = ed
-        .board
-        .notes
-        .iter()
-        .rev()
-        .filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q))
-        .map(|n| (n.id, n.title(), ed.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note } if note == n.id)).count()))
+/// A note's text without markdown marks, for a short preview: everything after its title line.
+fn note_snippet(text: &str) -> String {
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("```") && !l.chars().all(|c| matches!(c, '-' | '|' | ':' | ' ' | '*' | '_')));
+    lines.next();
+    let plain: Vec<String> = lines
+        .map(|l| {
+            let l = l.trim_start_matches('#').trim_start_matches('>').trim();
+            let l = l.strip_prefix("- [ ] ").or_else(|| l.strip_prefix("- [x] ")).or_else(|| l.strip_prefix("- ")).or_else(|| l.strip_prefix("* ")).unwrap_or(l);
+            // The words only: emphasis, code and link marks go.
+            crate::markdown::inline(&l.replace('|', " ")).into_iter().map(|s| s.text).collect::<String>()
+        })
         .collect();
-    if ed.board.notes.is_empty() {
-        ui.label(theme::secondary(ui, "No notes yet. New note starts one; pasted markdown and dropped .md files become notes too."));
-    } else if rows.is_empty() {
-        ui.label(theme::secondary(ui, "No note matches."));
-    }
-    let list_h = (ui.available_height() * 0.28).clamp(60.0, 220.0);
-    ScrollArea::vertical().id_salt("notes-list").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
-        for (id, title, cards) in &rows {
-            let sel = ed.open_note == Some(*id);
-            let resp = ui.add(egui::Button::selectable(sel, short_label(title)).frame_when_inactive(false).min_size(vec2(ui.available_width(), 22.0)));
-            if *cards > 0 {
-                ui.painter().text(pos2(resp.rect.right() - 6.0, resp.rect.center().y), egui::Align2::RIGHT_CENTER, "on board", egui::FontId::proportional(11.0), p.text_secondary);
-            }
-            if resp.clicked() {
-                ed.open_note = Some(*id);
-            }
-        }
-    });
-    ui.separator();
+    plain.join("  ")
+}
 
-    // ── the open note ──
-    let Some(nid) = ed.open_note.filter(|id| ed.board.note(*id).is_some()) else {
-        ui.label(theme::secondary(ui, "Pick a note to read or write it."));
-        return;
-    };
-    let cards = ed.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note } if note == nid)).count();
-    let confirm_id = ui.id().with(("delete-note", nid));
-    let mut confirming: bool = ui.data(|d| d.get_temp(confirm_id)).unwrap_or(false);
-    ui.horizontal_wrapped(|ui| {
-        let place = if cards == 0 { "Place on board" } else { "Place another card" };
-        if ui.button(place).on_hover_text("A card showing this note, in the middle of the view").clicked() {
-            let at = ed.paste_point();
-            ed.place_note(nid, at);
+/// A note being dragged in the Notes list (onto a folder).
+#[derive(Clone, Copy)]
+struct NoteDrag(Id);
+
+/// What a click in the Notes list asks for, done once the list is drawn.
+#[derive(Default)]
+struct ListActs {
+    open: Option<Id>,
+    ring: Option<(Pos2, Id)>,
+    drop: Option<(Id, Id)>,
+    rename: Option<(Id, String)>,
+    delete_folder: Option<Id>,
+}
+
+/// One note as a small card: title, the start of its text, when it was made.
+fn note_card(ui: &mut Ui, ed: &mut Editor, n: &(Id, String, String, usize, String), indent: f32, acts: &mut ListActs) {
+    let p = pal(ui.ctx());
+    let (id, title, snippet, cards, time) = n;
+    let w = ui.available_width() - indent;
+    let pad = 10.0;
+    let title_g = ui.painter().layout(title.clone(), egui::FontId::new(13.5, theme::semibold_family()), p.text, w - pad * 2.0);
+    let mut job = egui::text::LayoutJob::simple(snippet.clone(), egui::FontId::proportional(12.0), p.text_secondary, w - pad * 2.0);
+    job.wrap.max_rows = 3;
+    job.wrap.overflow_character = Some('…');
+    let snip_g = ui.painter().layout_job(job);
+    let snip_h = if snippet.is_empty() { 0.0 } else { snip_g.size().y + 4.0 };
+    let h = pad + title_g.size().y + snip_h + 18.0 + pad * 0.6;
+    let (row, resp) = ui.allocate_exact_size(vec2(w + indent, h), Sense::click_and_drag());
+    let rect = Rect::from_min_max(row.min + vec2(indent, 0.0), row.max);
+    resp.dnd_set_drag_payload(NoteDrag(*id));
+    let sel = ed.notes_sel.contains(id);
+    let fill = if sel { p.accent.gamma_multiply(0.16) } else if resp.hovered() { p.bg_control_hover } else { p.inner_card_fill };
+    let stroke = Stroke::new(if sel { 1.5 } else { 1.0 }, if sel { p.accent } else { p.inner_card_stroke });
+    ui.painter().rect(rect, CornerRadius::same(8), fill, stroke, egui::StrokeKind::Inside);
+    let th = title_g.size().y;
+    ui.painter().galley(pos2(rect.left() + pad, rect.top() + pad), title_g, p.text);
+    if !snippet.is_empty() {
+        ui.painter().galley(pos2(rect.left() + pad, rect.top() + pad + th + 4.0), snip_g, p.text_secondary);
+    }
+    let foot = if *cards > 0 { format!("{time}  ·  on board") } else { time.clone() };
+    ui.painter().text(pos2(rect.left() + pad, rect.bottom() - pad * 0.6), egui::Align2::LEFT_BOTTOM, foot, egui::FontId::proportional(11.0), p.text_secondary);
+    if resp.double_clicked() {
+        acts.open = Some(*id);
+    } else if resp.clicked() {
+        if ui.input(|i| i.modifiers.command || i.modifiers.shift) {
+            if sel {
+                ed.notes_sel.retain(|x| x != id);
+            } else {
+                ed.notes_sel.push(*id);
+            }
+        } else {
+            ed.notes_sel = vec![*id];
         }
-        if confirming {
-            let what = if cards == 0 { "Delete the note".to_owned() } else { format!("Delete the note and its {}", plural(cards, "card", "cards")) };
-            if ui.add(egui::Button::new(RichText::new(what).color(p.danger))).clicked() {
-                ed.delete_note(nid);
-                confirming = false;
+        ed.notes_focus = true;
+    }
+    // Holding the right button on a note opens its ring of options.
+    if resp.hovered() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+        acts.ring = ui.input(|i| i.pointer.hover_pos()).map(|s| (s, *id));
+    }
+}
+
+/// A folder's row: fold arrow, name, count. Click to pick it (new notes go in it), double-click to
+/// rename, drop notes on it to move them in. `id` 0 is the row for notes outside any folder.
+fn folder_row(ui: &mut Ui, ed: &mut Editor, id: Id, name: &str, count: usize, acts: &mut ListActs) {
+    let p = pal(ui.ctx());
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
+    let picked = ed.notes_folder == id;
+    let dropping = resp.dnd_hover_payload::<NoteDrag>().is_some();
+    let fill = if dropping { p.accent.gamma_multiply(0.25) } else if picked { p.accent.gamma_multiply(0.12) } else if resp.hovered() { p.bg_control_hover } else { Color32::TRANSPARENT };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    let folded = ed.folded.contains(&id);
+    // Fold arrow.
+    let a = rect.left_center() + vec2(10.0, 0.0);
+    let pts = if folded { vec![a + vec2(-2.0, -4.0), a + vec2(2.0, 0.0), a + vec2(-2.0, 4.0)] } else { vec![a + vec2(-4.0, -2.0), a + vec2(0.0, 2.0), a + vec2(4.0, -2.0)] };
+    ui.painter().add(egui::Shape::line(pts, Stroke::new(1.5, p.text_secondary)));
+    // Folder shape.
+    if id != 0 {
+        let f = Rect::from_min_size(rect.left_center() + vec2(20.0, -6.0), vec2(15.0, 11.0));
+        ui.painter().rect_stroke(f, CornerRadius::same(2), Stroke::new(1.3, if picked { p.accent } else { p.text_secondary }), egui::StrokeKind::Middle);
+        ui.painter().line_segment([f.left_top() + vec2(1.0, 0.0), f.left_top() + vec2(6.0, 0.0)], Stroke::new(2.4, if picked { p.accent } else { p.text_secondary }));
+    }
+    let text_x = rect.left() + if id != 0 { 42.0 } else { 22.0 };
+    let renaming = ed.renaming_folder.as_ref().is_some_and(|(r, _)| *r == id);
+    if renaming {
+        let mut name = ed.renaming_folder.as_ref().map(|(_, n)| n.clone()).unwrap_or_default();
+        let edit_rect = Rect::from_min_max(pos2(text_x - 4.0, rect.top() + 2.0), pos2(rect.right() - 30.0, rect.bottom() - 2.0));
+        let te = ui.put(edit_rect, egui::TextEdit::singleline(&mut name).id_salt(("folder-name", id)));
+        te.request_focus();
+        let done = te.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ed.renaming_folder = Some((id, name.clone()));
+        if done {
+            acts.rename = Some((id, name));
+        }
+    } else {
+        ui.painter().text(pos2(text_x, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::new(13.0, theme::semibold_family()), if picked { p.text } else { p.text_secondary });
+    }
+    ui.painter().text(pos2(rect.right() - 26.0, rect.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), egui::FontId::proportional(11.0), p.text_secondary);
+    // Delete, on hover, for real folders.
+    if id != 0 && resp.hovered() && !renaming {
+        let x = Rect::from_center_size(pos2(rect.right() - 11.0, rect.center().y), vec2(16.0, 16.0));
+        let over = ui.input(|i| i.pointer.hover_pos()).is_some_and(|q| x.contains(q));
+        ui.painter().text(x.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(14.0), if over { p.danger } else { p.text_secondary });
+        if over && resp.clicked() {
+            acts.delete_folder = Some(id);
+            return;
+        }
+    }
+    if let Some(drag) = resp.dnd_release_payload::<NoteDrag>() {
+        acts.drop = Some((drag.0, id));
+    } else if resp.double_clicked() && id != 0 {
+        ed.renaming_folder = Some((id, name.to_owned()));
+    } else if resp.clicked() {
+        let on_arrow = ui.input(|i| i.pointer.interact_pos()).is_some_and(|q| q.x < rect.left() + 18.0);
+        if on_arrow || picked {
+            if !ed.folded.remove(&id) {
+                ed.folded.insert(id);
             }
-            if ui.button("Keep").clicked() {
-                confirming = false;
-            }
-        } else if ui.button("Delete").clicked() {
-            confirming = true;
+        }
+        ed.notes_folder = id;
+    }
+}
+
+/// The Notes list, on the left: folders, and every note as a small card with its title and the
+/// start of its text. Click to pick (Ctrl-click for more, Delete deletes), double-click to open it in
+/// a tab, drag onto a folder to move it, hold the right button for its options.
+pub fn notes_ui(ui: &mut Ui, ed: &mut Editor) {
+    ui.horizontal(|ui| {
+        if ui.button("New note").on_hover_text("In the picked folder").clicked() {
+            let id = ed.add_note("# New note\n\n", true);
+            ed.notes_sel = vec![id];
+        }
+        if ui.button("New folder").clicked() {
+            ed.add_folder();
         }
     });
-    ui.data_mut(|d| d.insert_temp(confirm_id, confirming));
+    ui.add(egui::TextEdit::singleline(&mut ed.note_query).hint_text("Search notes").desired_width(f32::INFINITY));
+    ui.add_space(6.0);
+
+    let row_of = |ed: &Editor, n: &crate::board::Note| {
+        let cards = ed.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note } if note == n.id)).count();
+        (n.id, n.title(), note_snippet(&n.text), cards, crate::history::short_time(&n.created))
+    };
+    if ed.board.notes.is_empty() && ed.board.folders.is_empty() {
+        ui.label(theme::secondary(ui, "No notes yet. New note starts one; pasted markdown and dropped .md files become notes too."));
+        return;
+    }
+    let q = ed.note_query.trim().to_lowercase();
+    let mut acts = ListActs::default();
+    ScrollArea::vertical().id_salt("notes-list").auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+        if !q.is_empty() {
+            // Searching: every match, wherever it is filed.
+            let rows: Vec<_> = ed.board.notes.iter().rev().filter(|n| n.text.to_lowercase().contains(&q)).map(|n| row_of(ed, n)).collect();
+            if rows.is_empty() {
+                ui.label(theme::secondary(ui, "No note matches."));
+            }
+            for r in &rows {
+                note_card(ui, ed, r, 0.0, &mut acts);
+            }
+            return;
+        }
+        let folders = ed.board.folders.clone();
+        for f in &folders {
+            let rows: Vec<_> = ed.board.notes.iter().rev().filter(|n| n.folder == f.id).map(|n| row_of(ed, n)).collect();
+            folder_row(ui, ed, f.id, &f.name, rows.len(), &mut acts);
+            if !ed.folded.contains(&f.id) {
+                for r in &rows {
+                    note_card(ui, ed, r, 14.0, &mut acts);
+                }
+            }
+        }
+        let loose: Vec<_> = ed.board.notes.iter().rev().filter(|n| !folders.iter().any(|f| f.id == n.folder)).map(|n| row_of(ed, n)).collect();
+        // With folders, notes outside them get a row of their own (also a place to drop notes out).
+        if !folders.is_empty() {
+            folder_row(ui, ed, 0, "Not in a folder", loose.len(), &mut acts);
+        }
+        if folders.is_empty() || !ed.folded.contains(&0) {
+            for r in &loose {
+                note_card(ui, ed, r, 0.0, &mut acts);
+            }
+        }
+    });
+    if let Some(id) = acts.open {
+        ed.open_note = Some(id);
+    }
+    if let Some((note, folder)) = acts.drop {
+        // Dragging a picked note moves every picked note.
+        let ids = if ed.notes_sel.contains(&note) { ed.notes_sel.clone() } else { vec![note] };
+        ed.move_notes(&ids, folder);
+    }
+    if let Some((id, name)) = acts.rename {
+        ed.renaming_folder = None;
+        let name = name.trim().to_owned();
+        if let Some(f) = ed.board.folders.iter_mut().find(|f| f.id == id).filter(|f| !name.is_empty() && f.name != name) {
+            f.name = name;
+            ed.mark_changed();
+        }
+    }
+    if let Some(id) = acts.delete_folder {
+        ed.delete_folder(id);
+    }
+    if let Some((s, id)) = acts.ring {
+        if !ed.notes_sel.contains(&id) {
+            ed.notes_sel = vec![id];
+        }
+        ed.notes_focus = true;
+        let at = ed.paste_point();
+        ed.radial = Some(crate::radial::Radial::for_note(s, at, id));
+    }
+}
+
+/// A note open in its own tab: written in markdown, read formatted, or both side by side.
+pub fn note_view(ui: &mut Ui, ed: &mut Editor, nid: Id) {
+    let p = pal(ui.ctx());
+    if ed.board.note(nid).is_none() {
+        ui.label(theme::secondary(ui, "This note was deleted."));
+        return;
+    }
+    let cards = ed.board.objects.iter().filter(|o| matches!(o.kind, Kind::Note { note } if note == nid)).count();
+    ui.horizontal(|ui| {
+        let mut mode = ed.note_mode;
+        ui.allocate_ui(vec2(240.0, 26.0), |ui| {
+            if ui.segmented(&mut mode, &[(0, "Write"), (1, "Split"), (2, "Read")]) {
+                ed.note_mode = mode;
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Delete").on_hover_text(if cards == 0 { "Delete the note" } else { "Delete the note and its cards" }).clicked() {
+                ed.delete_notes(&[nid]);
+            }
+            let place = if cards == 0 { "Place on board" } else { "Place another card" };
+            if ui.button(place).on_hover_text("A card showing this note, in the middle of the view").clicked() {
+                let at = ed.paste_point();
+                ed.place_note(nid, at);
+            }
+            if cards > 0 {
+                ui.label(theme::secondary(ui, plural(cards, "card on the board", "cards on the board")));
+            }
+        });
+    });
     if ed.board.note(nid).is_none() {
         return;
     }
-    let mut mode = ed.note_mode;
-    if ui.segmented(&mut mode, &[(0, "Write"), (1, "Both"), (2, "Read")]) {
-        ed.note_mode = mode;
-    }
-    ui.add_space(4.0);
+    ui.add_space(6.0);
+    ui.separator();
 
-    let avail = ui.available_height();
-    let edit_h = match ed.note_mode {
-        0 => avail,
-        1 => (avail * 0.5).max(80.0),
-        _ => 0.0,
-    };
-    if ed.note_mode != 2 {
-        let mut text = ed.board.note(nid).map(|n| n.text.clone()).unwrap_or_default();
-        ScrollArea::vertical().id_salt(("note-edit", nid)).max_height(edit_h).auto_shrink([false, false]).show(ui, |ui| {
-            let te = egui::TextEdit::multiline(&mut text).font(egui::FontId::monospace(12.5)).desired_width(f32::INFINITY).desired_rows(((edit_h / 17.0) as usize).max(4)).lock_focus(true);
-            if ui.add(te).changed() {
-                if let Some(n) = ed.board.note_mut(nid) {
-                    n.text = text.clone();
-                }
-                ed.mark_changed();
-            }
-        });
+    let avail = ui.available_width();
+    match ed.note_mode {
+        0 => centred(ui, avail, |ui, w| note_editor(ui, ed, nid, w)),
+        2 => centred(ui, avail, |ui, w| note_reader(ui, ed, nid, w, &p)),
+        _ => {
+            ui.columns(2, |cols| {
+                let w0 = cols[0].available_width();
+                note_editor(&mut cols[0], ed, nid, w0);
+                let w1 = cols[1].available_width();
+                note_reader(&mut cols[1], ed, nid, w1, &p);
+            });
+        }
     }
-    if ed.note_mode != 0 {
-        if ed.note_mode == 1 {
-            ui.separator();
-        }
-        let blocks = ed.board.note(nid).map(|n| crate::markdown::parse(&n.text)).unwrap_or_default();
-        let mut clicked = None;
-        ScrollArea::vertical().id_salt(("note-read", nid)).auto_shrink([false, false]).show(ui, |ui| {
-            let width = ui.available_width() - 6.0;
-            let top = ui.cursor().min;
-            let (h, hits) = crate::markdown::paint(ui.painter(), &blocks, top, width, 1.0, p, p.text);
-            let resp = ui.allocate_rect(egui::Rect::from_min_size(top, vec2(width, h.max(20.0))), Sense::click());
-            if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.clicked()) {
-                clicked = hits.into_iter().find(|(r, _)| r.contains(pos)).map(|(_, t)| t);
-            }
+}
+
+/// A readable column, at most 760 wide, in the middle of `avail`.
+fn centred(ui: &mut Ui, avail: f32, f: impl FnOnce(&mut Ui, f32)) {
+    let w = avail.min(760.0);
+    ui.horizontal_top(|ui| {
+        ui.add_space(((avail - w) * 0.5).max(0.0));
+        ui.vertical(|ui| {
+            ui.set_width(w);
+            f(ui, w);
         });
-        match clicked {
-            Some(crate::markdown::Target::Task(line)) => ed.toggle_note_task(nid, line),
-            Some(crate::markdown::Target::Link(l)) => ed.follow_link(&l),
-            None => {}
+    });
+}
+
+fn note_editor(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32) {
+    let mut text = ed.board.note(nid).map(|n| n.text.clone()).unwrap_or_default();
+    ScrollArea::vertical().id_salt(("note-edit", nid)).auto_shrink([false, false]).show(ui, |ui| {
+        let rows = ((ui.available_height() / 19.0) as usize).max(6);
+        let te = egui::TextEdit::multiline(&mut text).id_salt(("note-text", nid)).font(egui::FontId::proportional(14.5)).frame(egui::Frame::NONE).desired_width(width - 8.0).desired_rows(rows).lock_focus(true);
+        if ui.add(te).changed() {
+            if let Some(n) = ed.board.note_mut(nid) {
+                n.text = text.clone();
+            }
+            ed.mark_changed();
         }
+    });
+}
+
+fn note_reader(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32, p: &crate::theme::Pal) {
+    let blocks = ed.board.note(nid).map(|n| crate::markdown::parse(&n.text)).unwrap_or_default();
+    let mut clicked = None;
+    ScrollArea::vertical().id_salt(("note-read", nid)).auto_shrink([false, false]).show(ui, |ui| {
+        let width = (width - 8.0).max(40.0);
+        let top = ui.cursor().min + vec2(0.0, 4.0);
+        // Slightly larger type than on cards, for reading.
+        let (h, hits) = crate::markdown::paint(ui.painter(), &blocks, top, width, 1.1, p, p.text);
+        let resp = ui.allocate_rect(egui::Rect::from_min_size(top, vec2(width, h.max(20.0) + 12.0)), Sense::click());
+        if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.clicked()) {
+            clicked = hits.into_iter().find(|(r, _)| r.contains(pos)).map(|(_, t)| t);
+        }
+    });
+    match clicked {
+        Some(crate::markdown::Target::Task(line)) => ed.toggle_note_task(nid, line),
+        Some(crate::markdown::Target::Link(l)) => ed.follow_link(&l),
+        None => {}
     }
 }

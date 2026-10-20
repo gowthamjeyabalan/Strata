@@ -13,7 +13,8 @@ const DEFAULT_SIZE: egui::Vec2 = vec2(240.0, 160.0);
 pub fn show(ctx: &egui::Context, ed: &mut Editor) {
     let canvas = ed.canvas_rect;
     let mut open = ed.show_overview;
-    if !open || canvas.width() < 120.0 || canvas.height() < 120.0 {
+    // Only over the board, not over a note open in its place.
+    if !open || !ed.canvas_visible || canvas.width() < 120.0 || canvas.height() < 120.0 {
         return;
     }
     let p = pal(ctx);

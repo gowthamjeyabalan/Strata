@@ -64,13 +64,23 @@ pub struct Editor {
     pub want_properties: bool,
     /// The Overview window is showing.
     pub show_overview: bool,
-    /// The note open in the Notes panel.
+    /// The board was drawn this frame (its tab is the one showing).
+    pub(crate) canvas_visible: bool,
+    /// A note to open in its own tab beside the board (taken by the app).
     pub open_note: Option<Id>,
-    /// Asked for the Notes panel to be shown.
-    pub want_notes: bool,
     pub note_query: String,
-    /// Notes panel: 0 edit, 1 split, 2 preview.
+    /// Note tabs: 0 write, 1 split, 2 read.
     pub note_mode: u8,
+    /// Notes picked in the Notes list.
+    pub notes_sel: Vec<Id>,
+    /// The Notes list was clicked last (rather than the board), so Delete deletes notes.
+    pub notes_focus: bool,
+    /// The folder picked in the Notes list; new notes go in it. 0 for none.
+    pub notes_folder: Id,
+    /// Folders folded shut in the Notes list.
+    pub folded: std::collections::HashSet<Id>,
+    /// A folder whose name is being typed, and the name so far.
+    pub(crate) renaming_folder: Option<(Id, String)>,
     /// How far each note card is scrolled, in world units.
     pub(crate) note_scroll: HashMap<Id, f32>,
     /// Each note card as last drawn: content height (world units) and what can be clicked (screen).
@@ -140,10 +150,15 @@ impl Default for Editor {
             radial_hold: None,
             want_properties: false,
             show_overview: true,
+            canvas_visible: false,
             open_note: None,
-            want_notes: false,
             note_query: String::new(),
             note_mode: 1,
+            notes_sel: Vec::new(),
+            notes_focus: false,
+            notes_folder: 0,
+            folded: Default::default(),
+            renaming_folder: None,
             note_scroll: HashMap::new(),
             note_view: Default::default(),
             open_url: None,
@@ -215,14 +230,61 @@ impl Editor {
 
     // ── notes ──
 
-    /// Write a new note (not on the board yet) and open it in the Notes panel.
-    pub fn add_note(&mut self, text: &str) -> Id {
+    /// Write a new note (not on the board yet). `open` opens it in a tab to write in.
+    pub fn add_note(&mut self, text: &str, open: bool) -> Id {
         let id = self.board.new_id();
-        self.board.notes.push(crate::board::Note { id, text: text.to_owned(), created: String::new() });
+        // New notes go in the folder picked in the Notes list.
+        let folder = if self.board.folders.iter().any(|f| f.id == self.notes_folder) { self.notes_folder } else { 0 };
+        self.board.notes.push(crate::board::Note { id, text: text.to_owned(), created: String::new(), folder });
         self.mark_changed();
-        self.open_note = Some(id);
-        self.want_notes = true;
+        if open {
+            self.open_note = Some(id);
+        }
         id
+    }
+
+    pub fn add_folder(&mut self) -> Id {
+        let id = self.board.new_id();
+        let n = (1..).find(|n| !self.board.folders.iter().any(|f| f.name == format!("Folder {n}"))).unwrap_or(1);
+        self.board.folders.push(crate::board::Folder { id, name: format!("Folder {n}") });
+        self.mark_changed();
+        self.notes_folder = id;
+        self.renaming_folder = Some((id, format!("Folder {n}")));
+        id
+    }
+
+    /// Delete a folder; its notes stay, outside any folder.
+    pub fn delete_folder(&mut self, id: Id) {
+        self.mark_changed();
+        self.board.folders.retain(|f| f.id != id);
+        for n in &mut self.board.notes {
+            if n.folder == id {
+                n.folder = 0;
+            }
+        }
+        if self.notes_folder == id {
+            self.notes_folder = 0;
+        }
+    }
+
+    /// Put notes in a folder (0 for none).
+    pub fn move_notes(&mut self, ids: &[Id], folder: Id) {
+        self.mark_changed();
+        for n in &mut self.board.notes {
+            if ids.contains(&n.id) {
+                n.folder = folder;
+            }
+        }
+    }
+
+    /// Delete several notes, and their cards.
+    pub fn delete_notes(&mut self, ids: &[Id]) {
+        let n = ids.len();
+        let name = ids.first().and_then(|id| self.board.note(*id)).map(|n| n.title()).unwrap_or_default();
+        for id in ids {
+            self.delete_note(*id);
+        }
+        self.say(if n == 1 { format!("Deleted note \"{name}\". Ctrl+Z brings it back.") } else { format!("Deleted {}. Ctrl+Z brings them back.", plural(n, "note", "notes")) });
     }
 
     /// Put a card for a note on the board, centred at `at`, and select it.
@@ -242,9 +304,7 @@ impl Editor {
         self.board.remove(&cards);
         let b = &self.board;
         self.selection.retain(|id| b.get(*id).is_some());
-        if self.open_note == Some(note) {
-            self.open_note = None;
-        }
+        self.notes_sel.retain(|id| *id != note);
     }
 
     pub fn toggle_note_task(&mut self, note: Id, line: usize) {
@@ -272,7 +332,6 @@ impl Editor {
                     self.selected_wire = None;
                 } else if let Some(nid) = note {
                     self.open_note = Some(nid);
-                    self.want_notes = true;
                 } else {
                     self.say(format!("No note or item called \"{name}\""));
                 }
@@ -757,7 +816,7 @@ impl Editor {
             return;
         }
         if let Some(t) = text.as_ref().filter(|t| crate::markdown::looks_like_markdown(t)) {
-            let note = self.add_note(t);
+            let note = self.add_note(t, false);
             self.place_note(note, at);
             self.say("Pasted as a note");
             return;

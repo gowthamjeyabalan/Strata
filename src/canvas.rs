@@ -786,7 +786,6 @@ impl Editor {
         }
         if let Some(Kind::Note { note }) = self.board.hit(w, self.tol()).and_then(|id| self.board.get(id)).map(|o| o.kind.clone()) {
             self.open_note = Some(note);
-            self.want_notes = true;
             return;
         }
         if self.tool != Tool::Select {
@@ -825,6 +824,7 @@ impl Editor {
         let rect = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         self.canvas_rect = rect;
+        self.canvas_visible = true;
         let origin = rect.min;
         if self.fit_pending {
             self.fit_pending = false;
@@ -898,7 +898,14 @@ impl Editor {
             }
         }
         let in_radial = self.radial.is_some();
-        crate::radial::update(self, &ctx);
+        // A ring opened from the Notes list is run by the app, so it works whichever tab is showing.
+        if !self.radial.as_ref().is_some_and(|r| r.from_list()) {
+            crate::radial::update(self, &ctx);
+        }
+        // Pressing on the board makes Delete act on the board again, not the Notes list.
+        if primary_pressed && over.is_some() {
+            self.notes_focus = false;
+        }
         if resp.dragged_by(PointerButton::Middle) || (resp.dragged_by(PointerButton::Secondary) && !in_radial) {
             self.camera.pan_by(resp.drag_delta());
         }

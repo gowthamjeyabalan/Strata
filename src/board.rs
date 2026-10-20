@@ -567,6 +567,9 @@ pub struct Board {
     /// is placed for it.
     #[serde(default)]
     pub notes: Vec<Note>,
+    /// Folders for notes in the Notes list.
+    #[serde(default)]
+    pub folders: Vec<Folder>,
     /// Items left out by the calendar's day filter: treated as hidden. Set every frame, never saved.
     #[serde(skip)]
     pub veil: std::collections::HashSet<Id>,
@@ -580,6 +583,15 @@ pub struct Note {
     /// When it was made, `YYYY-MM-DD HH:MM:SS`.
     #[serde(default)]
     pub created: String,
+    /// The folder it is in; 0 for none.
+    #[serde(default)]
+    pub folder: Id,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: Id,
+    pub name: String,
 }
 
 impl Note {

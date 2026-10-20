@@ -45,7 +45,8 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - A Graph panel listing connections, and a floating Overview map of the whole board.
 
 **Notes**
-- Markdown notes, written in the Notes panel with a live preview: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
+- A Notes list on the left shows every note as a card with a preview, in folders you make. Double-click a note to open it in its own tab beside the board, to write, read, or both side by side.
+- Markdown notes: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
 - Place a note on the board as a card: it can be resized, scrolls inside itself, and connects, groups and layers like any item. The same note can have several cards.
 - Pasting markdown or dropping `.md` files onto the window makes notes.
 
@@ -108,7 +109,7 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
 | History | Click a dot or a branch name to select it, Ctrl-click to select more, double-click a dot to go back to it. Deleting a state joins the states before and after it. Deleting a branch removes its states, and branches that grew from it are kept. "Keep only" deletes everything except the selection and the states needed to reach it. These cannot be undone. |
 | Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto Add, Tools, Width, Layer, Colour, Arrange or View opens an outer ring (Add's sections open a third): move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
-| Notes | New note in the Notes panel starts one; Write, Both and Read switch between the editor and the preview. Place on board adds a card; double-clicking a card opens its note. The mouse wheel over a card scrolls it (Ctrl+wheel zooms). Click a checkbox on a card to tick it, or a link to follow it. Deleting a note also deletes its cards. |
+| Notes | New note starts one (in the folder picked in the list) and opens it in a tab; Write, Split and Read switch between the editor and the preview. Double-click a note in the list, or its card on the board, to open it. Click notes in the list to pick them (Ctrl-click for more) and press Delete to delete them. New folder makes a folder; double-click its name to rename it, drag notes onto it to move them in, and click its arrow to fold it. Holding the right button on a note in the list opens its ring: open, place on board, move to a folder, delete. On the board, a selected note card's ring has a Note section with the same. Place on board adds a card; The mouse wheel over a card scrolls it (Ctrl+wheel zooms). Click a checkbox on a card to tick it, or a link to follow it. Deleting a note also deletes its cards. |
 | Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
 | Panels | Calendar, Properties, Layers, Graph and History are dockable tabs. View > Reset panel layout restores the default. |
 
