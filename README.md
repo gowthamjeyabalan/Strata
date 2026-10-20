@@ -49,7 +49,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Markdown notes: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
 - Place a note on the board as a card: it can be resized, scrolls inside itself, and connects, groups and layers like any item. The same note can have several cards.
 - Pasting markdown or dropping `.md` files onto the window makes notes.
-- Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names, and dotted lines join the cards of linked notes on the board (View > Links between note cards).
+- Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names; a link to a note that does not exist yet shows paler, and following it (a click when reading, Ctrl+click when writing) makes that note and opens it. Dotted lines join the cards of linked notes on the board (View > Links between note cards).
 
 **Pages, frames and presenting**
 - Several pages in one board, as a row of buttons under the board. Each page has its own items; notes are shared by all pages.

@@ -21,6 +21,8 @@ pub struct Span {
     pub strike: bool,
     pub code: bool,
     pub link: Option<Link>,
+    /// A `[[Name]]` link to a note that does not exist yet (following it makes the note).
+    pub missing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -387,7 +389,12 @@ fn job(spans: &[Span], width: f32, size: f32, strong: bool, ink: Color32, p: &Pa
         } else {
             FontFamily::Proportional
         };
-        let color = if s.link.is_some() { p.accent } else { ink };
+        // Links are blue; a link to a note that does not exist yet is a paler blue.
+        let color = match &s.link {
+            Some(_) if s.missing => p.accent.gamma_multiply(0.55),
+            Some(_) => p.accent,
+            None => ink,
+        };
         let mut f = TextFormat::simple(FontId::new(if s.code { size * 0.92 } else { size }, family), color);
         f.italics = s.italic;
         if s.strike {
@@ -463,4 +470,28 @@ pub fn wiki_links(text: &str) -> Vec<String> {
         rest = &after[b + 2..];
     }
     out
+}
+
+/// Mark `[[Name]]` links whose target `known` does not recognise, so they show as not made yet.
+pub fn mark_missing(blocks: &mut [Block], known: &dyn Fn(&str) -> bool) {
+    let fix = |spans: &mut Vec<Span>| {
+        for s in spans.iter_mut() {
+            if let Some(Link::Wiki(name)) = &s.link {
+                s.missing = !known(name);
+            }
+        }
+    };
+    for b in blocks.iter_mut() {
+        match b {
+            Block::Heading(_, s) | Block::Para(s) | Block::Quote(s) | Block::Item { spans: s, .. } => fix(s),
+            Block::Table(rows) => {
+                for row in rows.iter_mut() {
+                    for cell in row.iter_mut() {
+                        fix(cell);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }

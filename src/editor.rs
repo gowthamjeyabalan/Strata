@@ -361,9 +361,23 @@ impl Editor {
         }
     }
 
-    /// Follow a link in a note: a web link opens in the browser; `[[Name]]` goes to the note or item
-    /// with that name (a note's card on the board, or else the note in the Notes panel).
-    pub fn follow_link(&mut self, link: &crate::markdown::Link) {
+    /// Is there a note or an item called `name` (what a `[[Name]]` link leads to)?
+    pub fn link_known(&self, name: &str) -> bool {
+        let key = name.trim().to_lowercase();
+        self.board.notes.iter().any(|n| n.title().to_lowercase() == key) || self.board.objects.iter().any(|o| !o.label.trim().is_empty() && self.board.display_name(o.id).to_lowercase() == key)
+    }
+
+    /// A note's blocks, ready to draw: links to notes that do not exist yet are marked.
+    pub fn note_blocks(&self, text: &str) -> Vec<crate::markdown::Block> {
+        let mut blocks = crate::markdown::parse(text);
+        crate::markdown::mark_missing(&mut blocks, &|n| self.link_known(n));
+        blocks
+    }
+
+    /// Follow a link in a note (`from`, if it came from one): a web link opens in the browser;
+    /// `[[Name]]` goes to the note or item with that name (a note's card on the board, or else the note
+    /// in its tab). If there is none, the note is made, in the same folder, and opened to write.
+    pub fn follow_link(&mut self, link: &crate::markdown::Link, from: Option<Id>) {
         match link {
             crate::markdown::Link::Url(u) => self.open_url = Some(u.clone()),
             crate::markdown::Link::Wiki(name) => {
@@ -376,7 +390,13 @@ impl Editor {
                 } else if let Some(nid) = note {
                     self.open_note = Some(nid);
                 } else {
-                    self.say(format!("No note or item called \"{name}\""));
+                    let folder = from.and_then(|f| self.board.note(f)).map(|n| n.folder).unwrap_or(self.notes_folder);
+                    let id = self.add_note(&format!("# {}\n\n", name.trim()), true);
+                    if let Some(n) = self.board.note_mut(id) {
+                        n.folder = folder;
+                    }
+                    self.notes_sel = vec![id];
+                    self.say(format!("Made the note \"{}\"", name.trim()));
                 }
             }
         }

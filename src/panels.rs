@@ -1476,7 +1476,7 @@ pub fn note_view(ui: &mut Ui, ed: &mut Editor, nid: Id) {
         });
     }
     if linked.is_empty() && mentioned.is_empty() {
-        ui.label(theme::secondary(ui, "No other note links here yet. Write [[ and a name to link notes."));
+        ui.label(theme::secondary(ui, "No other note links here yet. Write [[ and a name to link notes; Ctrl+click a link to open it, or make the note if it is new."));
     }
     if let Some(id) = go {
         ed.open_note = Some(id);
@@ -1604,6 +1604,28 @@ fn note_editor(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32) {
             state.store(ui.ctx(), te_id);
         }
     }
+    if out.response.clicked() && ui.input(|i| i.modifiers.command) {
+        if let Some(c) = cursor {
+            let line_start = chars[..c.min(chars.len())].iter().rposition(|ch| *ch == '\n').map(|k| k + 1).unwrap_or(0);
+            let line_end = chars[c.min(chars.len())..].iter().position(|ch| *ch == '\n').map(|k| k + c).unwrap_or(chars.len());
+            let line: String = chars[line_start..line_end].iter().collect();
+            let at = c - line_start;
+            // The [[...]] around the click, on that line.
+            let mut k = 0;
+            for name in crate::markdown::wiki_links(&line) {
+                let pat = format!("[[{name}");
+                if let Some(s) = line[k..].find(&pat).map(|s| s + k) {
+                    let start = line[..s].chars().count();
+                    let end = start + name.chars().count() + 4;
+                    if at >= start && at <= end {
+                        ed.follow_link(&crate::markdown::Link::Wiki(name.clone()), Some(nid));
+                        break;
+                    }
+                    k = s + pat.len();
+                }
+            }
+        }
+    }
     let shown = if chosen.is_some() { 0 } else { titles.len() };
     ui.data_mut(|d| d.insert_temp(ac_id, (pick, shown)));
     if changed {
@@ -1615,7 +1637,7 @@ fn note_editor(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32) {
 }
 
 fn note_reader(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32, p: &crate::theme::Pal) {
-    let blocks = ed.board.note(nid).map(|n| crate::markdown::parse(&n.text)).unwrap_or_default();
+    let blocks = ed.board.note(nid).map(|n| ed.note_blocks(&n.text)).unwrap_or_default();
     let mut clicked = None;
     ScrollArea::vertical().id_salt(("note-read", nid)).auto_shrink([false, false]).show(ui, |ui| {
         let width = (width - 8.0).max(40.0);
@@ -1629,7 +1651,7 @@ fn note_reader(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32, p: &crate::the
     });
     match clicked {
         Some(crate::markdown::Target::Task(line)) => ed.toggle_note_task(nid, line),
-        Some(crate::markdown::Target::Link(l)) => ed.follow_link(&l),
+        Some(crate::markdown::Target::Link(l)) => ed.follow_link(&l, Some(nid)),
         None => {}
     }
 }

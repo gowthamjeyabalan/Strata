@@ -774,7 +774,7 @@ impl Editor {
                 });
                 match target {
                     Some((note, crate::markdown::Target::Task(line))) => return self.toggle_note_task(note, line),
-                    Some((_, crate::markdown::Target::Link(l))) => return self.follow_link(&l),
+                    Some((note, crate::markdown::Target::Link(l))) => return self.follow_link(&l, Some(note)),
                     None => {}
                 }
                 if let Some(id) = self.board.hit(w, tol) {
@@ -1472,7 +1472,7 @@ impl Editor {
                 let (height, hits) = match self.board.note(*note) {
                     Some(n) if inner.width() > 4.0 && inner.height() > 4.0 => {
                         let clipped = painter.with_clip_rect(inner.expand(2.0).intersect(painter.clip_rect()));
-                        let blocks = crate::markdown::parse(&n.text);
+                        let blocks = self.note_blocks(&n.text);
                         crate::markdown::paint(&clipped, &blocks, inner.min - vec2(0.0, scroll), inner.width(), z, p, text_color)
                     }
                     Some(_) => (0.0, Vec::new()),

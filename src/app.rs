@@ -716,9 +716,15 @@ impl App {
                 self.dock.push_to_focused_leaf(tab);
             }
         }
-        // Tabs of deleted notes close.
+        // Tabs of deleted notes (or notes of another board) close, and the board shows in their place.
         let notes: Vec<crate::board::Id> = self.ed.board.notes.iter().map(|n| n.id).collect();
-        self.dock.retain_tabs(|t| !matches!(t, Tab::Note(id) if !notes.contains(id)));
+        let stale = self.dock.iter_all_tabs().any(|(_, t)| matches!(t, Tab::Note(id) if !notes.contains(id)));
+        if stale {
+            self.dock.retain_tabs(|t| !matches!(t, Tab::Note(id) if !notes.contains(id)));
+            if let Some(path) = self.dock.find_tab(&Tab::Board) {
+                let _ = self.dock.set_active_tab(path);
+            }
+        }
         // A ring opened on the Notes list.
         if self.ed.radial.as_ref().is_some_and(|r| r.from_list()) {
             crate::radial::update(&mut self.ed, &ctx);
