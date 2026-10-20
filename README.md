@@ -14,7 +14,7 @@
 
 **Overlay** is a fast, lightweight whiteboard for Windows. Drop in images, sketch with a pen, marker or highlighter, and build flowcharts. Every item on the board is a node with ports on all four sides, so an image, a scribble, a text box or a whole group can be connected to anything else. Connections show relationships; they do not carry data.
 
-<p align="center"><img alt="Overlay with a grouped flowchart, a group of ideas, pen, pencil and marker sketches, and the Overview map" src="docs/screenshot.png" width="900"></p>
+<p align="center"><img alt="Overlay with two frames on the Plan page: a flowchart with yes and no branches and a sketch, and two linked note cards with a sticky note, a curve and a polygon. The Notes list with folders is on the left, the page buttons and the week Calendar are below the board, and Properties is on the right." src="docs/screenshot.png" width="900"></p>
 
 ## Download
 
