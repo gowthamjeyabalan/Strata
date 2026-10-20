@@ -46,6 +46,15 @@ struct Settings {
     show_overview: Option<bool>,
     snapping: Option<bool>,
     poly_curved: Option<bool>,
+    show_note_links: Option<bool>,
+    show_grid: Option<bool>,
+    radial_empty: Option<bool>,
+    radial_hold_ms: Option<u32>,
+    undo_steps: Option<usize>,
+    note_mode: Option<u8>,
+    ui_scale: Option<f32>,
+    reopen_last: Option<bool>,
+    keys: Option<crate::keys::Keymap>,
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
@@ -90,6 +99,11 @@ pub struct App {
     ask_save: Option<Pending>,
     /// Presenting last frame, to switch full screen on and off once.
     was_presenting: bool,
+    settings_win: crate::settings::SettingsWindow,
+    /// Interface size (egui's zoom factor).
+    ui_scale: f32,
+    /// Open the last board when the app starts.
+    reopen_last: bool,
     /// Frame timing, only when OVERLAY_PERF names a file to write it to.
     perf: Option<Perf>,
 }
@@ -162,9 +176,21 @@ impl App {
         if let Some(s) = settings.snapping {
             ed.snapping = s;
         }
+        ed.show_overview = settings.show_overview.unwrap_or(true);
+        ed.show_note_links = settings.show_note_links.unwrap_or(true);
+        ed.show_grid = settings.show_grid.unwrap_or(true);
+        ed.radial_empty = settings.radial_empty.unwrap_or(true);
+        ed.radial_hold_ms = settings.radial_hold_ms.unwrap_or(300).clamp(150, 1000);
+        ed.undo_steps = settings.undo_steps.unwrap_or(crate::history::STEPS).clamp(20, 500);
+        ed.history.set_limit(ed.undo_steps);
+        ed.note_mode = settings.note_mode.unwrap_or(1).min(2);
+        ed.keys = settings.keys.clone().unwrap_or_default();
+        let ui_scale = settings.ui_scale.unwrap_or(1.0).clamp(0.75, 1.5);
+        cc.egui_ctx.set_zoom_factor(ui_scale);
+        let reopen_last = settings.reopen_last.unwrap_or(true);
         // A file given on the command line wins over the last one used.
         let arg = std::env::args().nth(1).map(PathBuf::from);
-        let reopened = arg.or(settings.last_file).filter(|p| p.exists()).map(|p| ed.load(&p).is_ok()).unwrap_or(false);
+        let reopened = arg.or(settings.last_file.filter(|_| reopen_last)).filter(|p| p.exists()).map(|p| ed.load(&p).is_ok()).unwrap_or(false);
         if !reopened {
             ed.fit_pending = true;
         }
@@ -179,6 +205,9 @@ impl App {
             export: ExportSettings::default(),
             ask_save: None,
             was_presenting: false,
+            settings_win: Default::default(),
+            ui_scale,
+            reopen_last,
             perf: Perf::from_env(),
         }
     }
@@ -274,77 +303,46 @@ impl App {
     fn shortcuts(&mut self, ui: &Ui) {
         let ctx = ui.ctx().clone();
         let typing = ctx.egui_wants_keyboard_input();
-        let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
-        let cmd_shift = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
-        let ev = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
 
         // While the save dialog is up, it has the keyboard.
         if self.ask_save.is_some() {
             return;
         }
-        // File shortcuts work even while typing.
-        if ev(cmd(Key::O)) {
-            self.request(&ctx, Pending::Open);
+        // While a new shortcut is being set in Settings, keys belong to it.
+        if self.settings_win.capturing() {
+            return;
         }
-        if ev(cmd(Key::N)) {
-            self.request(&ctx, Pending::New);
+        // Shortcuts from the key map (Settings > Keyboard shortcuts). While a label is being typed,
+        // only file commands with Ctrl (and search) work; the rest of the keys belong to the text.
+        // (egui drops the text box's focus on Esc before this runs, so check the edit itself too.)
+        let busy = typing || self.ed.is_editing();
+        let presses: Vec<(Key, Modifiers)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => Some((*key, *modifiers)),
+                    _ => None,
+                })
+                .collect()
+        });
+        for (key, m) in presses {
+            let Some(a) = self.ed.keys.action_for(key, m) else { continue };
+            if busy && !(a.while_typing() && (m.command || m.ctrl)) {
+                continue;
+            }
+            ctx.input_mut(|i| i.consume_key(m, key));
+            self.run_action(&ctx, a);
+        }
+        // Ctrl+Shift+Z also redoes, whatever the Redo shortcut is.
+        if !busy && ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))) {
+            self.ed.redo();
         }
         let ed = &mut self.ed;
-        if ev(cmd_shift(Key::S)) {
-            ed.save(true);
-        } else if ev(cmd(Key::S)) {
-            ed.save(false);
-        }
-        if ev(cmd(Key::E)) {
-            self.export.open = true;
-        }
-        if ev(cmd(Key::K)) {
-            ed.palette = if ed.palette.is_some() { None } else { Some(crate::search::Palette { focus: true, ..Default::default() }) };
-        }
-        // While a label is being typed, keys belong to it. (egui drops the text box's focus on Esc
-        // before this runs, so check the edit itself too: Esc should only end the typing.)
-        if typing || ed.is_editing() {
+        if busy {
             return;
         }
         // A polyline being drawn takes Enter, Esc and Backspace.
         ed.poly_keys(&ctx);
-        if ev(cmd_shift(Key::Z)) || ev(cmd(Key::Y)) {
-            ed.redo();
-        } else if ev(cmd(Key::Z)) {
-            ed.undo();
-        }
-        if ev(cmd(Key::A)) {
-            ed.select_all();
-        }
-        if ev(cmd(Key::L)) {
-            ed.toggle_lock();
-        }
-        if ev(cmd_shift(Key::G)) {
-            ed.ungroup_selection();
-        } else if ev(cmd(Key::G)) {
-            ed.group_selection();
-        }
-        if ev(cmd(Key::D)) {
-            ed.duplicate();
-        }
-        if ev(cmd(Key::I)) {
-            ed.pick_images();
-        }
-        if ev(cmd(Key::CloseBracket)) {
-            ed.reorder_selection(true);
-        }
-        if ev(cmd(Key::OpenBracket)) {
-            ed.reorder_selection(false);
-        }
-        if ev(cmd(Key::Num0)) {
-            ed.reset_zoom();
-        }
-        if ev(KeyboardShortcut::new(Modifiers::NONE, Key::F5)) {
-            ed.start_present(0);
-        }
-        if ev(KeyboardShortcut::new(Modifiers::SHIFT, Key::Num1)) {
-            ed.zoom_to_fit();
-        }
 
         let (events, mods) = ctx.input(|i| (i.events.clone(), i.modifiers));
         let mut pasted = false;
@@ -364,24 +362,6 @@ impl App {
         }
         self.v_was_down = v_down || (pasted && mods.command);
 
-        // "/" opens the list of items to add (connected to the selected node, if there is one).
-        if !mods.command && ed.insert.is_none() && ctx.input(|i| i.key_pressed(Key::Slash)) {
-            ed.open_insert_here();
-            return;
-        }
-        if mods.is_none() {
-            if ctx.input(|i| i.key_pressed(Key::M)) {
-                ed.show_overview = !ed.show_overview;
-            }
-            ctx.input(|i| {
-                for t in Tool::ALL {
-                    if i.key_pressed(t.key()) {
-                        ed.finish_edit();
-                        ed.tool = t;
-                    }
-                }
-            });
-        }
         ctx.input(|i| {
             if i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace) {
                 // The Notes list, if it was clicked last; otherwise the board.
@@ -434,7 +414,10 @@ impl App {
                 if ui.button("Insert image…").clicked() {
                     self.ed.pick_images();
                 }
-                if ui.button("Export image…  Ctrl+E").clicked() {
+                if ui.button("Settings…").clicked() {
+                    self.settings_win.open = true;
+                }
+                if ui.button("Export image…").clicked() {
                     self.export.open = true;
                 }
             });
@@ -465,7 +448,7 @@ impl App {
                 if ui.add_enabled(self.ed.any_group_selected(), egui::Button::new("Ungroup")).clicked() {
                     self.ed.ungroup_selection();
                 }
-                if ui.add_enabled(!self.ed.selection.is_empty(), egui::Button::new("Lock or unlock  Ctrl+L")).clicked() {
+                if ui.add_enabled(!self.ed.selection.is_empty(), egui::Button::new("Lock or unlock")).clicked() {
                     self.ed.toggle_lock();
                 }
                 ui.separator();
@@ -735,6 +718,10 @@ impl App {
         overview::show(&ctx, &mut self.ed);
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);
+        crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, reopen_last: &mut self.reopen_last });
+        if (ctx.zoom_factor() - self.ui_scale).abs() > 1e-3 {
+            ctx.set_zoom_factor(self.ui_scale);
+        }
         if let Some(c) = crate::search::show(&ctx, &mut self.ed) {
             self.run_cmd(&ctx, c);
         }
@@ -751,6 +738,46 @@ impl App {
             painter.rect_stroke(r, 10.0, egui::Stroke::new(2.0, p.accent), egui::StrokeKind::Inside);
             painter.text(r.center(), egui::Align2::CENTER_CENTER, "Drop to add to the board", egui::FontId::proportional(14.0), p.accent_text);
         }
+    }
+
+    /// What a keyboard shortcut does.
+    fn run_action(&mut self, ctx: &egui::Context, a: crate::keys::Action) {
+        use crate::keys::Action;
+        use crate::search::Cmd;
+        let cmd = match a {
+            Action::Tool(t) => Cmd::Tool(t),
+            Action::NewBoard => Cmd::NewBoard,
+            Action::Open => Cmd::Open,
+            Action::Save => Cmd::Save,
+            Action::SaveAs => Cmd::SaveAs,
+            Action::Export => Cmd::Export,
+            Action::Settings => Cmd::Settings,
+            Action::Undo => Cmd::Undo,
+            Action::Redo => Cmd::Redo,
+            Action::SelectAll => Cmd::SelectAll,
+            Action::Duplicate => Cmd::Duplicate,
+            Action::Lock => Cmd::Lock,
+            Action::Group => Cmd::Group,
+            Action::Ungroup => Cmd::Ungroup,
+            Action::InsertImage => Cmd::InsertImage,
+            Action::ZoomFit => Cmd::ZoomFit,
+            Action::ActualSize => Cmd::ActualSize,
+            Action::Overview => Cmd::Overview,
+            Action::Present => Cmd::Present,
+            Action::Search => {
+                self.ed.palette = if self.ed.palette.is_some() { None } else { Some(crate::search::Palette { focus: true, ..Default::default() }) };
+                return;
+            }
+            Action::AddItem => {
+                if self.ed.insert.is_none() {
+                    self.ed.open_insert_here();
+                }
+                return;
+            }
+            Action::BringFront => return self.ed.reorder_selection(true),
+            Action::SendBack => return self.ed.reorder_selection(false),
+        };
+        self.run_cmd(ctx, cmd);
     }
 
     /// A command picked in search everything (Ctrl+K).
@@ -806,6 +833,7 @@ impl App {
                 theme::set_appearance(ctx, a);
             }
             Cmd::ResetLayout => self.dock = default_dock(),
+            Cmd::Settings => self.settings_win.open = true,
             Cmd::Tool(t) => {
                 ed.finish_edit();
                 ed.tool = t;
@@ -839,6 +867,15 @@ impl App {
             show_overview: Some(self.ed.show_overview),
             snapping: Some(self.ed.snapping),
             poly_curved: Some(self.ed.poly_curved),
+            show_note_links: Some(self.ed.show_note_links),
+            show_grid: Some(self.ed.show_grid),
+            radial_empty: Some(self.ed.radial_empty),
+            radial_hold_ms: Some(self.ed.radial_hold_ms),
+            undo_steps: Some(self.ed.undo_steps),
+            note_mode: Some(self.ed.note_mode),
+            ui_scale: Some(self.ui_scale),
+            reopen_last: Some(self.reopen_last),
+            keys: Some(self.ed.keys.clone()),
         };
         eframe::set_value(storage, SETTINGS_KEY, &s);
     }

@@ -56,6 +56,7 @@ pub enum Cmd {
     Light,
     System,
     ResetLayout,
+    Settings,
     Tool(Tool),
     Show(Panel),
 }
@@ -90,6 +91,7 @@ fn commands() -> Vec<(Cmd, String, &'static str)> {
         (Cmd::Light, "Light mode".into(), "theme appearance"),
         (Cmd::System, "Follow Windows' mode".into(), "theme appearance system"),
         (Cmd::ResetLayout, "Reset panel layout".into(), "panels dock"),
+        (Cmd::Settings, "Settings".into(), "preferences options keyboard shortcuts keys"),
     ];
     for t in Tool::ALL {
         v.push((Cmd::Tool(t), format!("{} tool", t.name()), "tool draw"));

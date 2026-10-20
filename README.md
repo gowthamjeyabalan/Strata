@@ -77,6 +77,8 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 
 ## Keyboard
 
+These are the defaults; every tool and most commands can be given other keys in Settings > Keyboard shortcuts.
+
 | Keys | Action |
 |---|---|
 | V, H | Select, pan |
@@ -96,6 +98,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 | M | Show or hide the Overview |
 | Ctrl+E | Export an image |
 | Ctrl+K | Search everything, run a command |
+| Ctrl+, | Settings |
 | F, F5 | Frame tool, present |
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | New, open, save, save as |
 
@@ -118,6 +121,7 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Comments | Click the speech bubble at an item's top-right corner. Ctrl+Enter posts. |
 | Radial menu | Hold the right button on an item (it is selected if it was not), or hold it still for a moment on empty board, and move outward to an action; let go to do it. Moving onto Add, Tools, Width, Layer, Colour, Arrange or View opens an outer ring (Add's sections open a third): move onto a colour, a layer or front/back and let go. Letting go in the middle, or pressing Esc, cancels. A quick right-click leaves the ring open to click in. |
 | Notes | New note starts one (in the folder picked in the list) and opens it in a tab; Write, Split and Read switch between the editor and the preview. Double-click a note in the list, or its card on the board, to open it. Click notes in the list to pick them (Ctrl-click for more) and press Delete to delete them. New folder makes a folder; double-click its name to rename it, drag notes onto it to move them in, and click its arrow to fold it. Holding the right button on a note in the list opens its ring: open, place on board, move to a folder, delete. On the board, a selected note card's ring has a Note section with the same. Place on board adds a card; The mouse wheel over a card scrolls it (Ctrl+wheel zooms). Click a checkbox on a card to tick it, or a link to follow it. Deleting a note also deletes its cards. |
+| Settings | File > Settings…, Ctrl+, or Ctrl+K "Settings". Sections for appearance (mode, interface size), the board, drawing, notes, the radial menu, undo, files, and keyboard shortcuts. In Keyboard shortcuts, click a shortcut and press the new keys; a shortcut belongs to one action, so giving it to another moves it. Esc, Delete, Enter, the arrows, copy and paste, and Space stay fixed. |
 | Pages | Click a page button under the board to show it, double-click to rename it, + adds one, and the × beside the current page deletes it with what is on it (Ctrl+Z brings it back). Each page keeps its own view. |
 | Frames | Frames sit behind everything and are picked by their edge or name. Double-click the name to rename it. In the Frames panel, click a frame to go to it, use the arrows to change the slide order, and ▶ to present from it. |
 | Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |

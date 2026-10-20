@@ -76,6 +76,16 @@ pub struct Editor {
     pub want_properties: bool,
     /// The Overview window is showing.
     pub show_overview: bool,
+    /// The grid of dots behind the board.
+    pub show_grid: bool,
+    /// Holding the right button still on empty board opens the radial menu.
+    pub radial_empty: bool,
+    /// How long that hold is, in milliseconds.
+    pub radial_hold_ms: u32,
+    /// How many changes undo keeps.
+    pub undo_steps: usize,
+    /// The keyboard shortcuts.
+    pub keys: crate::keys::Keymap,
     /// Dotted lines join the cards of notes that link to each other.
     pub show_note_links: bool,
     /// The board was drawn this frame (its tab is the one showing).
@@ -145,7 +155,7 @@ impl Default for Editor {
     fn default() -> Self {
         Self {
             board: Board::default(),
-            history: Undo::new(&Board::default()),
+            history: Undo::new(&Board::default(), crate::history::STEPS),
             pending: None,
             dirty: false,
             path: None,
@@ -170,6 +180,11 @@ impl Default for Editor {
             radial_hold: None,
             want_properties: false,
             show_overview: true,
+            show_grid: true,
+            radial_empty: true,
+            radial_hold_ms: 300,
+            undo_steps: crate::history::STEPS,
+            keys: Default::default(),
             show_note_links: true,
             canvas_visible: false,
             open_note: None,
@@ -237,6 +252,7 @@ impl Editor {
     }
 
     /// Keep the per-editor settings when the board is replaced.
+    /// A new editor for another board, keeping the settings.
     fn fresh(&self) -> Editor {
         Editor {
             style: self.style,
@@ -245,6 +261,16 @@ impl Editor {
             brush_widths: self.brush_widths,
             tool: self.tool,
             snapping: self.snapping,
+            poly_curved: self.poly_curved,
+            show_overview: self.show_overview,
+            show_note_links: self.show_note_links,
+            show_grid: self.show_grid,
+            radial_empty: self.radial_empty,
+            radial_hold_ms: self.radial_hold_ms,
+            undo_steps: self.undo_steps,
+            note_mode: self.note_mode,
+            keys: self.keys.clone(),
+            history: Undo::new(&Board::default(), self.undo_steps),
             ..Editor::default()
         }
     }
@@ -1038,7 +1064,7 @@ impl Editor {
         self.board.fix_after_load();
         // Files from older versions kept images their history used; the board only needs its own.
         self.board.gc_images();
-        self.history = Undo::new(&self.board);
+        self.history = Undo::new(&self.board, self.undo_steps);
         self.camera = f.camera;
         self.path = Some(path.to_owned());
         let n = self.board.objects.len();

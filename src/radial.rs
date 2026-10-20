@@ -186,7 +186,7 @@ fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
             enabled: true,
             act: None,
             children: {
-                let tool = |t: Tool| Child { label: format!("{} ({})", t.name(), t.key_name()), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t, sub: Vec::new() };
+                let tool = |t: Tool| Child { label: ed.keys.label(crate::keys::Action::Tool(t)), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t, sub: Vec::new() };
                 let section = |label: &str, look: Look, sub: Vec<Child>| Child { label: label.into(), look, act: Act::Open, current: false, sub };
                 let poly = ed.tool == Tool::Polyline;
                 let mut shapes: Vec<Child> = [Tool::Line, Tool::Arrow].into_iter().map(tool).collect();
@@ -217,7 +217,7 @@ fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
             act: None,
             children: [Tool::Select, Tool::Hand, Tool::Connect]
                 .into_iter()
-                .map(|t| Child { label: format!("{} ({})", t.name(), t.key_name()), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t, sub: Vec::new() })
+                .map(|t| Child { label: ed.keys.label(crate::keys::Action::Tool(t)), look: Look::Tool(t), act: Act::Tool(t), current: ed.tool == t, sub: Vec::new() })
                 .collect(),
         },
         Item {

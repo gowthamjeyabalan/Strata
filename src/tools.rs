@@ -7,7 +7,7 @@ use crate::board::Brush;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, vec2};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Default)]
 pub enum Tool {
     #[default]
     Select,
@@ -88,27 +88,6 @@ impl Tool {
             Tool::Node => N,
             Tool::Text => T,
             Tool::Connect => C,
-        }
-    }
-
-    pub fn key_name(self) -> &'static str {
-        match self {
-            Tool::Select => "V",
-            Tool::Hand => "H",
-            Tool::Pen => "P",
-            Tool::Pencil => "B",
-            Tool::Marker => "K",
-            Tool::Highlighter => "Y",
-            Tool::Eraser => "E",
-            Tool::Line => "L",
-            Tool::Arrow => "A",
-            Tool::Polyline => "U",
-            Tool::Frame => "F",
-            Tool::Rectangle => "R",
-            Tool::Ellipse => "O",
-            Tool::Node => "N",
-            Tool::Text => "T",
-            Tool::Connect => "C",
         }
     }
 

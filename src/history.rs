@@ -7,8 +7,8 @@ use crate::board::{Board, Folder, Id, ImageAsset, Layer, Note, Object, Page, Wir
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
-/// How many changes can be undone.
-const STEPS: usize = 100;
+/// How many changes can be undone, unless Settings says otherwise.
+pub const STEPS: usize = 100;
 
 /// The board at one step.
 pub struct Snapshot {
@@ -74,11 +74,20 @@ pub struct Undo {
     current: Snapshot,
     past: VecDeque<Snapshot>,
     future: Vec<Snapshot>,
+    /// How many steps back are kept.
+    limit: usize,
 }
 
 impl Undo {
-    pub fn new(board: &Board) -> Self {
-        Undo { current: Snapshot::capture(board, None), past: VecDeque::new(), future: Vec::new() }
+    pub fn new(board: &Board, limit: usize) -> Self {
+        Undo { current: Snapshot::capture(board, None), past: VecDeque::new(), future: Vec::new(), limit: limit.max(1) }
+    }
+
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit.max(1);
+        while self.past.len() > self.limit {
+            self.past.pop_front();
+        }
     }
 
     /// The board as last recorded.
@@ -93,7 +102,7 @@ impl Undo {
         }
         let next = Snapshot::capture(board, Some(&self.current));
         self.past.push_back(std::mem::replace(&mut self.current, next));
-        if self.past.len() > STEPS {
+        if self.past.len() > self.limit {
             self.past.pop_front();
         }
         self.future.clear();

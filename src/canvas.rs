@@ -921,7 +921,9 @@ impl Editor {
                     self.selected_wire = None;
                     self.radial = Some(crate::radial::Radial::new(s, w, true));
                 } else {
-                    self.radial_hold = Some((s, w, std::time::Instant::now()));
+                    if self.radial_empty {
+                        self.radial_hold = Some((s, w, std::time::Instant::now()));
+                    }
                 }
             }
         }
@@ -933,7 +935,7 @@ impl Editor {
                 self.radial_hold = None;
                 self.finish_edit();
                 self.radial = Some(crate::radial::Radial::new(s, w, false).sticky());
-            } else if t.elapsed().as_secs_f32() >= 0.3 {
+            } else if t.elapsed().as_millis() as u32 >= self.radial_hold_ms {
                 self.radial_hold = None;
                 self.finish_edit();
                 self.radial = Some(crate::radial::Radial::new(s, w, false));
@@ -1055,7 +1057,9 @@ impl Editor {
         // ── draw ──
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::ZERO, p.canvas);
-        self.draw_grid(&painter, rect, p);
+        if self.show_grid {
+            self.draw_grid(&painter, rect, p);
+        }
         let hovered = if matches!(self.tool, Tool::Select | Tool::Connect) && matches!(self.drag, Drag::None) {
             self.hover_world.and_then(|w| self.board.hit(w, self.tol()))
         } else {
