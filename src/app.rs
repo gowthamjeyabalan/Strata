@@ -674,12 +674,10 @@ impl App {
     }
 
     fn update_title(&mut self, ui: &Ui) {
-        // Worded like Grapht's: the app's name alone, or the board's name and the app's. A dot marks
-        // unsaved changes.
-        let dot = if self.ed.dirty { "• " } else { "" };
+        // The app's name, then the board's: "Overlay — name", or "Overlay" alone with no board.
         let t = match self.ed.path.as_ref().and_then(|p| p.file_stem()) {
-            Some(stem) => format!("{dot}{} — Overlay", stem.to_string_lossy()),
-            None if self.ed.dirty => format!("{dot}Untitled — Overlay"),
+            Some(stem) => format!("Overlay — {}", stem.to_string_lossy()),
+            None if self.ed.dirty => "Overlay — Untitled".to_owned(),
             None => "Overlay".to_owned(),
         };
         if t != self.title {
