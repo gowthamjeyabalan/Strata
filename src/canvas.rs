@@ -1057,9 +1057,8 @@ impl Editor {
         let ctx = ui.ctx().clone();
         let p = pal(&ctx);
         let full = ui.available_rect_before_wrap();
-        // Along the bottom: the page buttons, and under them the date roller. The board is the rest.
-        let roller = Rect::from_min_max(pos2(full.left(), full.bottom() - crate::calendar::ROLLER), full.max);
-        let strip = Rect::from_min_max(pos2(full.left(), roller.top() - PAGE_STRIP), pos2(full.right(), roller.top()));
+        // Along the bottom: the page buttons. The board is the rest.
+        let strip = Rect::from_min_max(pos2(full.left(), full.bottom() - PAGE_STRIP), full.max);
         let rect = Rect::from_min_max(full.min, pos2(full.right(), strip.top()));
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         self.canvas_rect = rect;
@@ -1304,7 +1303,6 @@ impl Editor {
 
         self.edit_overlay(ui, origin, p);
         self.page_strip(ui, strip, p);
-        crate::calendar::date_roller(ui, self, roller);
     }
 
     /// Presenting: the current frame fills the screen. Arrow keys, Space, Page Up/Down or a click move
@@ -1357,7 +1355,7 @@ impl Editor {
     /// The page buttons: click one to show it, double-click to rename it, + adds a page, and the ×
     /// on a hovered page deletes it (with what is on it; undo brings it back).
     fn page_strip(&mut self, ui: &mut Ui, strip: Rect, p: &Pal) {
-        ui.painter().rect_filled(strip, CornerRadius::ZERO, p.bg);
+        ui.painter().rect_filled(strip, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, p.bg);
         ui.painter().line_segment([strip.left_top(), strip.right_top()], Stroke::new(1.0, p.hairline));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(strip.shrink2(vec2(8.0, 5.0))).layout(egui::Layout::left_to_right(Align::Center)));
         let ui = &mut child;

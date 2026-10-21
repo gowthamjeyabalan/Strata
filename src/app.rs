@@ -62,7 +62,7 @@ struct Settings {
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 9;
+const DOCK_VERSION: u32 = 10;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
@@ -70,7 +70,9 @@ fn default_dock() -> DockState<Tab> {
     // The board keeps most of the window (the tools float over it), the Calendar sits under it, and
     // the other panels are on the right.
     // Notes are listed on the left, like files in a notebook app; opened notes are tabs beside the board.
-    let [board, _notes] = s.split_left(NodeIndex::root(), 0.17, vec![Tab::Notes]);
+    let [board, notes] = s.split_left(NodeIndex::root(), 0.17, vec![Tab::Notes]);
+    // The calendar under the notes, like the Windows calendar flyout.
+    s.split_below(notes, 0.58, vec![Tab::Calendar]);
     s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Frames]);
     d
 }
@@ -521,7 +523,7 @@ impl App {
     /// Panels on and off, and saved arrangements of them.
     fn window_menu(&mut self, ui: &mut Ui) {
         ui.label(theme::secondary(ui, "Panels"));
-        for (tab, name) in [(Tab::Notes, "Notes"), (Tab::Properties, "Properties"), (Tab::Layers, "Layers"), (Tab::Frames, "Frames")] {
+        for (tab, name) in [(Tab::Notes, "Notes"), (Tab::Calendar, "Calendar"), (Tab::Properties, "Properties"), (Tab::Layers, "Layers"), (Tab::Frames, "Frames")] {
             let mut on = self.dock.find_tab(&tab).is_some();
             if ui.checkbox(&mut on, name).clicked() {
                 self.toggle_tab(tab);
@@ -577,6 +579,7 @@ impl App {
         }
         let neighbour = match tab {
             Tab::Notes => None,
+            Tab::Calendar => self.dock.find_tab(&Tab::Notes),
             _ => [Tab::Properties, Tab::Layers, Tab::Frames].iter().find_map(|t| self.dock.find_tab(t)),
         };
         if let Some(path) = neighbour {
@@ -719,9 +722,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => {
                 ui.label(theme::secondary(ui, "Tools are in the radial menu: hold the right mouse button on the board. View > Reset panel layout removes this tab."));
             }
-            Tab::Calendar => {
-                ui.label(theme::secondary(ui, "The calendar is now the row of dates under the board. View > Reset panel layout removes this tab."));
-            }
+            Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
             Tab::Notes => panels::notes_ui(ui, self.ed),
             Tab::Frames => panels::frames_ui(ui, self.ed),
             Tab::Note(id) => panels::note_view(ui, self.ed, *id),
@@ -905,8 +906,16 @@ impl App {
             crate::radial::update(&mut self.ed, &ctx);
         }
         overview::show(&ctx, &mut self.ed);
+        // egui_dock shows a grab cursor over tab titles (they can be dragged to re-dock), which Windows
+        // draws as the four-way move arrows. Outside the board, keep the ordinary pointer until a tab
+        // is actually being dragged.
+        let off_board = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|q| !self.ed.canvas_rect.contains(q));
+        if off_board && !ctx.input(|i| i.pointer.any_down()) && ctx.output(|o| o.cursor_icon) == egui::CursorIcon::Grab {
+            ctx.set_cursor_icon(egui::CursorIcon::Default);
+        }
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);
+        panels::colour_picker(&ctx, &mut self.ed);
         crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view });
         if (ctx.zoom_factor() - self.ui_scale).abs() > 1e-3 {
             ctx.set_zoom_factor(self.ui_scale);

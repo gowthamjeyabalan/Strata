@@ -14,7 +14,7 @@
 
 **Overlay** is a fast, lightweight whiteboard for Windows. Drop in images, sketch with a pen, marker or highlighter, and build flowcharts. Every item on the board is a node with ports on all four sides, so an image, a scribble, a text box or a whole group can be connected to anything else. Connections show relationships; they do not carry data.
 
-<p align="center"><img alt="Overlay with two frames on the Plan page: a flowchart with yes and no branches and a sketch, and two linked note cards with a sticky note, a curve and a polygon. The Notes list with folders is on the left, the page buttons and the date roller are below the board, and Properties is on the right." src="docs/screenshot.png" width="900"></p>
+<p align="center"><img alt="Overlay with two frames on the Plan page: a flowchart with yes and no branches and a sketch, and two linked note cards with a sticky note, a curve and a polygon. The Notes list with folders is on the left, the page buttons are below the board, and Properties is on the right." src="docs/screenshot.png" width="900"></p>
 
 ## Download
 
@@ -66,7 +66,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 
 **Dates**
 - Every item records when it was made and each day it was changed, automatically.
-- A row of dates under the board shows how much was done each day. Click a date (Ctrl-click for more) to highlight that day's items on the board.
+- A month calendar under the notes, like the Windows one, marks the days something was made or changed. Click a day (Ctrl-click for more) to highlight that day's items on the board.
 
 **Style**
 - Style presets, solid or gradient fills, solid, dashed or dotted lines, rounded corners, and sketch, glass and shadow effects.
@@ -130,10 +130,10 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Settings | File > Settings…, Ctrl+, or Ctrl+K "Settings". Sections for appearance (mode, interface size), the board, drawing, notes, the radial menu, undo, files, and keyboard shortcuts. In Keyboard shortcuts, click a shortcut and press the new keys; a shortcut belongs to one action, so giving it to another moves it. Esc, Delete, Enter, the arrows, copy and paste, and Space stay fixed. |
 | Pages | Click a page button under the board to show it, double-click to rename it, + adds one, and the × beside the current page deletes it with what is on it (Ctrl+Z brings it back). Each page keeps its own view. |
 | Frames | Frames sit behind everything and are picked by their edge or name. Double-click the name to rename it. In the Frames panel, click a frame to go to it, use the arrows to change the slide order, and ▶ to present from it. |
-| Dates | Click a date in the row under the board to highlight what was made or changed that day (Ctrl-click for more days, click again or Clear to stop). |
-| Panels | Notes, Properties, Layers and Frames are dockable tabs. The Window menu turns them on and off, saves the arrangement as a named workspace to come back to, and restores the default layout. |
+| Calendar | Click a day in the calendar under the notes to highlight what was made or changed that day (Ctrl-click for more days, click again or Clear to stop). The arrows or the mouse wheel change the month. |
+| Panels | Notes, Calendar, Properties, Layers and Frames are dockable tabs. The Window menu turns them on and off, saves the arrangement as a named workspace to come back to, and restores the default layout. |
 | Start view | Shows when Overlay opens (unless a board was opened from Explorer): new board, open, the demo, and recent boards. Settings > Files turns it off, and the last board then opens straight away. |
-| Colours | In the radial menu, Colour opens rings for red, green and blue: move around a ring to set it and let go to use the colour. The outer ring has the ready colours and the ones mixed before. |
+| Colours | In the radial menu, Colour offers the ready colours and the ones picked lately; More colours… opens a picker with a colour square, a hue strip, red, green, blue and hex values, and the colour before and after. |
 
 </details>
 
@@ -167,7 +167,7 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/radial.rs` | The radial menu: tools, new items and actions on the selection |
 | `src/markdown.rs` | Reading and drawing notes' markdown |
 | `src/search.rs` | Search everything (Ctrl+K) |
-| `src/dates.rs`, `src/calendar.rs` | Dates on items and the date roller |
+| `src/dates.rs`, `src/calendar.rs` | Dates on items and the calendar |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 
 The look follows the **Grapht** design system: a quiet grey interface with one blue accent, Inter type, and round strokes. Its tokens and notes are in [`design/`](design). The logo is an "O" left open and closed by a blue dot; the brand kit and its generator are in [`brand/`](brand).

@@ -27,10 +27,6 @@ enum Hot {
     Child(usize, usize),
     /// An item of the third ring: wedge, section, item.
     Grand(usize, usize, usize),
-    /// One of the Colour wedge's red, green and blue rings (0, 1, 2).
-    Channel(usize),
-    /// A colour on the Colour wedge's outer ring.
-    Swatch(usize),
 }
 
 pub struct Radial {
@@ -50,8 +46,6 @@ pub struct Radial {
     hot: Hot,
     /// Opened by a quick click: stays open until something is clicked.
     sticky: bool,
-    /// The colour being mixed on the Colour wedge's rings (set when it opens).
-    rgb: Option<[u8; 3]>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -59,6 +53,8 @@ enum Act {
     /// Opens a further ring; does nothing itself.
     Open,
     New(NewItem),
+    /// Open the colour picker window.
+    PickColour,
     NewNote,
     PlaceNote(Id),
     OpenNote(Id),
@@ -138,7 +134,7 @@ struct Item {
 
 impl Radial {
     pub fn new(center: Pos2, world: Pos2, on_item: bool) -> Self {
-        Radial { center, world, on_item, note: None, opened: Instant::now(), sub: None, sub2: None, hot: Hot::None, sticky: false, rgb: None }
+        Radial { center, world, on_item, note: None, opened: Instant::now(), sub: None, sub2: None, hot: Hot::None, sticky: false }
     }
     /// The ring for a note in the Notes list. Cards placed from it go at `world`.
     pub fn for_note(center: Pos2, world: Pos2, note: Id) -> Self {
@@ -251,11 +247,12 @@ fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
             icon: Icon::Colour,
             enabled: true,
             act: None,
-            // The outer ring: the presets, then colours mixed before. Inside it, red, green and blue rings.
+            // The presets, the colours picked lately, and the full picker.
             children: board::swatches()
                 .into_iter()
                 .chain(ed.custom_colors.iter().map(|c| Ink::Rgb(*c)))
                 .map(|i| Child { label: if i == Ink::Auto { "Ink (follows the theme)".into() } else { "Colour".into() }, look: Look::Swatch(i), act: Act::Ink(i), current: ink == Some(i), sub: Vec::new() })
+                .chain(std::iter::once(Child { label: "More colours…".into(), look: Look::Paint(paint_spectrum_icon), act: Act::PickColour, current: false, sub: Vec::new() }))
                 .collect(),
         },
         Item {
@@ -385,32 +382,6 @@ fn nearest(center: Pos2, q: Pos2, rects: &[Rect], dir: f32, min_dist: f32) -> Op
     rects.iter().enumerate().min_by(|a, b| a.1.center().distance(q).total_cmp(&b.1.center().distance(q))).map(|(j, _)| j)
 }
 
-/// The Colour wedge's rings: red, green and blue, from inside out, then the colours.
-const RING_IN: f32 = R1 + 14.0;
-const RING_W: f32 = 16.0;
-const RING_GAP: f32 = 5.0;
-const SWATCH_R: f32 = RING_IN + 3.0 * (RING_W + RING_GAP) + 18.0;
-
-fn ring_span(k: usize) -> (f32, f32) {
-    let a = RING_IN + k as f32 * (RING_W + RING_GAP);
-    (a, a + RING_W)
-}
-
-/// A channel value from an angle: 0 at the top, rising clockwise to 255.
-fn angle_value(angle: f32) -> u8 {
-    let t = (angle + FRAC_PI_2).rem_euclid(TAU) / TAU;
-    (t * 255.0).round() as u8
-}
-
-fn value_angle(v: u8) -> f32 {
-    -FRAC_PI_2 + v as f32 / 255.0 * TAU
-}
-
-fn swatch_pos(c: Pos2, k: usize, n: usize) -> Pos2 {
-    let a = -FRAC_PI_2 + k as f32 / n.max(1) as f32 * TAU;
-    c + vec2(a.cos(), a.sin()) * SWATCH_R
-}
-
 /// Run the radial menu for one frame: follow the pointer, draw, and do the chosen action when the
 /// button is let go (or clicked, if it stayed open).
 pub fn update(ed: &mut Editor, ctx: &egui::Context) {
@@ -435,29 +406,6 @@ pub fn update(ed: &mut Editor, ctx: &egui::Context) {
             r.sub = (!list[w].children.is_empty() && list[w].enabled).then_some(w);
             r.sub2 = None;
             Hot::Main(w)
-        } else if let Some(s) = r.sub.filter(|s| list[*s].icon == Icon::Colour) {
-            // Past the ring with Colour open: its red, green and blue rings set the colour by the
-            // angle; the outer ring offers ready colours.
-            if r.rgb.is_none() {
-                let cur = ed.selection.first().and_then(|id| ed.board.get(*id)).map(|o| ed.board.ink_of(o)).unwrap_or(ed.style.ink);
-                let c = cur.color(&pal(ctx));
-                r.rgb = Some([c.r(), c.g(), c.b()]);
-            }
-            let swatches = list[s].children.len();
-            if let Some(k) = (0..3).find(|k| { let (a, b) = ring_span(*k); dist >= a - 2.0 && dist <= b + 2.0 }) {
-                if let Some(rgb) = r.rgb.as_mut() {
-                    rgb[k] = angle_value(angle);
-                }
-                Hot::Channel(k)
-            } else if let Some(k) = (0..swatches).min_by(|a, b| swatch_pos(r.center, *a, swatches).distance(q).total_cmp(&swatch_pos(r.center, *b, swatches).distance(q))).filter(|k| swatch_pos(r.center, *k, swatches).distance(q) <= 16.0) {
-                Hot::Swatch(k)
-            } else {
-                // Between the rings: keep what was under the pointer last.
-                match r.hot {
-                    Hot::Channel(_) | Hot::Swatch(_) => r.hot,
-                    _ => Hot::Main(s),
-                }
-            }
         } else {
             // Past the ring: an item of the third ring, of the second, or else the wedge in that
             // direction.
@@ -553,8 +501,6 @@ fn chosen(r: &Radial, list: &[Item]) -> Option<Act> {
         Hot::Main(w) if list[w].enabled => list[w].act,
         Hot::Child(s, j) => list[s].children.get(j).map(|c| c.act).filter(|a| *a != Act::Open),
         Hot::Grand(s, j, k) => list[s].children.get(j).and_then(|c| c.sub.get(k)).map(|c| c.act),
-        Hot::Channel(_) => r.rgb.map(|c| Act::Ink(Ink::Rgb(c))),
-        Hot::Swatch(k) => r.sub.and_then(|s| list[s].children.get(k)).map(|c| c.act),
         _ => None,
     }
 }
@@ -571,6 +517,10 @@ fn run(ed: &mut Editor, a: Act, r: &Radial) {
     let at = note_at();
     match a {
         Act::Open => {}
+        Act::PickColour => {
+            let cur = ed.selection.first().and_then(|id| ed.board.get(*id)).map(|o| ed.board.ink_of(o)).unwrap_or(ed.style.ink);
+            ed.colour_pick = Some(cur);
+        }
         Act::NewNote => {
             let note = ed.add_note("# New note\n\n", true);
             ed.place_note(note, at);
@@ -620,18 +570,7 @@ fn run(ed: &mut Editor, a: Act, r: &Radial) {
             let name = ed.board.layers.iter().find(|l| l.id == id).map(|l| l.name.clone()).unwrap_or_default();
             ed.say(format!("Moved to {name}"));
         }
-        Act::Ink(ink) => {
-            // The colour for what is drawn next, and for the selection. A mixed colour joins the ring.
-            if let Ink::Rgb(c) = ink {
-                if !board::swatches().contains(&ink) {
-                    ed.custom_colors.retain(|x| *x != c);
-                    ed.custom_colors.insert(0, c);
-                    ed.custom_colors.truncate(8);
-                }
-            }
-            ed.style.ink = ink;
-            crate::panels::apply_to_selection(ed, |s| s.ink = ink);
-        }
+        Act::Ink(ink) => crate::panels::use_colour(ed, ink),
         Act::Front => ed.reorder_selection(true),
         Act::Back => ed.reorder_selection(false),
         Act::Group => ed.group_selection(),
@@ -680,7 +619,6 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
     let open = match r.hot {
         Hot::Main(w) => Some(w),
         Hot::Child(s, _) | Hot::Grand(s, _, _) => Some(s),
-        Hot::Channel(_) | Hot::Swatch(_) => r.sub,
         Hot::None => None,
     };
     if let Some(w) = open {
@@ -707,22 +645,11 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
         Hot::Main(w) => list[w].label.clone(),
         Hot::Child(s, j) => list[s].children.get(j).map(|ch| ch.label.clone()).unwrap_or_default(),
         Hot::Grand(s, j, k) => list[s].children.get(j).and_then(|c| c.sub.get(k)).map(|ch| ch.label.clone()).unwrap_or_default(),
-        Hot::Channel(_) => r.rgb.map(|[cr, cg, cb]| format!("R {cr}\nG {cg}\nB {cb}")).unwrap_or_default(),
-        Hot::Swatch(k) => r.sub.and_then(|s| list[s].children.get(k)).map(|c| c.label.clone()).unwrap_or_default(),
         Hot::None => if r.sticky { "Click one".into() } else { "Cancel".into() },
     };
-    // While mixing a colour, the middle shows it.
-    if let (Hot::Channel(_), Some([cr, cg, cb])) = (r.hot, r.rgb) {
-        painter.circle_filled(c, R0 - 3.0, Color32::from_rgb(cr, cg, cb));
-    }
     let g = painter.layout(label, FontId::proportional(10.5), p.text, R0 * 2.0 - 8.0);
     painter.galley(c - g.size() * 0.5, g, p.text);
 
-    // Colour: the red, green and blue rings, and the ring of colours.
-    if let Some(s) = r.sub.filter(|s| list[*s].icon == Icon::Colour) {
-        draw_colour_rings(painter, p, r, &list[s].children);
-        return;
-    }
     // The outer rings of the open wedge.
     if let Some(s) = r.sub.filter(|s| list[*s].enabled) {
         let second = child_rects(painter, c, s, n, &list[s].children);
@@ -738,43 +665,6 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
             for (k, (ch, rc)) in kids.iter().zip(&third).enumerate() {
                 draw_child(painter, p, ch, *rc, if r.hot == Hot::Grand(s, j, k) { 2 } else { 0 });
             }
-        }
-    }
-}
-
-/// The Colour wedge: a ring for each of red, green and blue (each shaded from 0 to 255 with the other
-/// two as they are, and a knob at its value), and the ready colours around them.
-fn draw_colour_rings(painter: &Painter, p: &Pal, r: &Radial, swatches: &[Child]) {
-    let c = r.center;
-    let rgb = r.rgb.unwrap_or([128, 128, 128]);
-    // A backing so the rings read over the board.
-    painter.circle_filled(c, SWATCH_R + 20.0, p.window_fill.gamma_multiply(0.92));
-    painter.circle_stroke(c, SWATCH_R + 20.0, Stroke::new(1.0, p.window_stroke));
-    const STEPS: usize = 72;
-    for k in 0..3 {
-        let (a, b) = ring_span(k);
-        for i in 0..STEPS {
-            let v0 = (i * 255 / STEPS) as u8;
-            let mut col = rgb;
-            col[k] = v0;
-            let t0 = value_angle(v0);
-            let t1 = value_angle(((i + 1) * 255 / STEPS) as u8) + 0.01;
-            sector(painter, c, a, b, t0, t1, Color32::from_rgb(col[0], col[1], col[2]));
-        }
-        let hot = r.hot == Hot::Channel(k);
-        let knob = value_angle(rgb[k]);
-        let at = c + vec2(knob.cos(), knob.sin()) * (a + b) * 0.5;
-        painter.circle(at, if hot { 7.5 } else { 6.0 }, Color32::WHITE, Stroke::new(1.5, if hot { p.accent } else { Color32::from_black_alpha(140) }));
-        let label = ["R", "G", "B"][k];
-        painter.text(c + vec2(0.0, -(a + b) * 0.5), egui::Align2::CENTER_CENTER, label, FontId::proportional(9.5), Color32::WHITE);
-    }
-    let n = swatches.len();
-    for (k, ch) in swatches.iter().enumerate() {
-        let at = swatch_pos(c, k, n);
-        let hot = r.hot == Hot::Swatch(k);
-        if let Look::Swatch(ink) = &ch.look {
-            painter.circle(at, if hot { 13.0 } else { 11.0 }, p.window_fill, Stroke::new(if hot { 2.0 } else { 1.0 }, if hot || ch.current { p.accent } else { p.window_stroke }));
-            painter.circle(at, 7.5, ink.color(p), Stroke::new(1.0, p.hairline));
         }
     }
 }
@@ -966,4 +856,15 @@ fn paint_curve_icon(p: &Painter, rect: Rect, c: Color32, dot: Color32) {
         p.circle_filled(*q, 1.5 * s, c);
     }
     p.circle_filled(pts[3], 1.7 * s, dot);
+}
+
+/// Icon for the colour picker: a ring of hues.
+fn paint_spectrum_icon(p: &Painter, rect: Rect, _c: Color32, _dot: Color32) {
+    let c = rect.center();
+    let rad = rect.width().min(rect.height()) * 0.42;
+    for k in 0..12 {
+        let a0 = k as f32 / 12.0 * TAU;
+        let col = egui::epaint::Hsva::new(k as f32 / 12.0, 0.75, 0.95, 1.0);
+        sector(p, c, rad * 0.45, rad, a0, a0 + TAU / 12.0 + 0.02, Color32::from(col));
+    }
 }

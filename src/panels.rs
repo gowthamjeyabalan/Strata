@@ -1546,3 +1546,115 @@ pub fn frames_ui(ui: &mut Ui, ed: &mut Editor) {
         ed.start_present(k);
     }
 }
+
+/// Use a colour for the selection and for what is drawn next. A colour that is not one of the
+/// presets is remembered with the recent colours.
+pub(crate) fn use_colour(ed: &mut Editor, ink: Ink) {
+    if let Ink::Rgb(c) = ink {
+        if !board::swatches().contains(&ink) {
+            ed.custom_colors.retain(|x| *x != c);
+            ed.custom_colors.insert(0, c);
+            ed.custom_colors.truncate(10);
+        }
+    }
+    ed.style.ink = ink;
+    apply_to_selection(ed, |s| s.ink = ink);
+}
+
+/// The colour picker window: a saturation and brightness square with a hue strip, the red, green,
+/// blue and hex values, the colour before and after, and the colours picked lately.
+pub fn colour_picker(ctx: &egui::Context, ed: &mut Editor) {
+    let Some(start) = ed.colour_pick else { return };
+    let p = pal(ctx);
+    let id = egui::Id::new("colour-picker");
+    let start_c = start.color(p);
+    let mut c: Color32 = ctx.data(|d| d.get_temp(id)).unwrap_or(start_c);
+    let mut open = true;
+    let mut apply = false;
+    let mut cancel = false;
+    egui::Window::new(theme::semibold("Colour").size(13.0))
+        .id(id.with("window"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.spacing_mut().slider_width = 240.0;
+            // The square and the hue strip only; the values are below, once.
+            let mut hsva = egui::ecolor::Hsva::from(c);
+            if egui::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::color_picker::Alpha::Opaque) {
+                c = Color32::from(hsva);
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                // Before and after, side by side.
+                let (r, _) = ui.allocate_exact_size(vec2(64.0, 28.0), Sense::hover());
+                let (a, b) = (Rect::from_min_max(r.min, pos2(r.center().x, r.max.y)), Rect::from_min_max(pos2(r.center().x, r.min.y), r.max));
+                ui.painter().rect_filled(a, CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, start_c);
+                ui.painter().rect_filled(b, CornerRadius { nw: 0, sw: 0, ne: 6, se: 6 }, c);
+                ui.painter().rect_stroke(r, 6.0, Stroke::new(1.0, p.hairline), egui::StrokeKind::Inside);
+                ui.add_space(8.0);
+                let mut rgb = [c.r(), c.g(), c.b()];
+                let mut changed = false;
+                for (k, name) in ["R", "G", "B"].iter().enumerate() {
+                    ui.label(theme::secondary(ui, *name));
+                    changed |= ui.add(egui::DragValue::new(&mut rgb[k]).range(0..=255).speed(1.0)).changed();
+                }
+                if changed {
+                    c = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(theme::secondary(ui, "Hex"));
+                let hex_id = id.with("hex");
+                let mut hex: String = ui.data(|d| d.get_temp(hex_id)).unwrap_or_else(|| format!("{:02X}{:02X}{:02X}", c.r(), c.g(), c.b()));
+                let r = ui.add(egui::TextEdit::singleline(&mut hex).desired_width(90.0).font(egui::FontId::monospace(13.0)));
+                if r.changed() {
+                    let h = hex.trim().trim_start_matches('#');
+                    if h.len() == 6 {
+                        if let Ok(v) = u32::from_str_radix(h, 16) {
+                            c = Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+                        }
+                    }
+                }
+                if r.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(hex_id, hex));
+                } else {
+                    ui.data_mut(|d| d.remove::<String>(hex_id));
+                }
+            });
+            if !ed.custom_colors.is_empty() {
+                ui.add_space(4.0);
+                ui.label(theme::secondary(ui, "Recent"));
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    for rc in ed.custom_colors.clone() {
+                        let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                        ui.painter().rect(r.shrink(2.0), 4.0, Color32::from_rgb(rc[0], rc[1], rc[2]), Stroke::new(1.0, if resp.hovered() { p.accent } else { p.hairline }), egui::StrokeKind::Inside);
+                        if resp.clicked() {
+                            c = Color32::from_rgb(rc[0], rc[1], rc[2]);
+                        }
+                    }
+                });
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(RichText::new("Apply").color(Color32::WHITE)).fill(p.accent).min_size(vec2(80.0, 28.0))).clicked() {
+                    apply = true;
+                }
+                if ui.add(egui::Button::new("Cancel").min_size(vec2(80.0, 28.0))).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+    if apply {
+        use_colour(ed, Ink::Rgb([c.r(), c.g(), c.b()]));
+    }
+    if apply || cancel || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ed.colour_pick = None;
+        ctx.data_mut(|d| d.remove::<Color32>(id));
+    } else {
+        ctx.data_mut(|d| d.insert_temp(id, c));
+    }
+}

@@ -99,8 +99,10 @@ pub struct Editor {
     pub layers_open: std::collections::HashSet<Id>,
     /// The image being cropped.
     pub cropping: Option<Id>,
-    /// Colours mixed on the radial menu's rings, newest first.
+    /// Colours picked in the colour picker, newest first.
     pub custom_colors: Vec<[u8; 3]>,
+    /// The colour picker window is open, starting from this colour.
+    pub colour_pick: Option<Ink>,
     /// Pictures shown in notes, by source, loaded once (none if the source could not be read).
     pub(crate) note_pictures: std::cell::RefCell<HashMap<String, Option<(egui::TextureHandle, egui::Vec2)>>>,
     /// Notes picked in the Notes list.
@@ -119,6 +121,8 @@ pub struct Editor {
     pub(crate) note_view: std::cell::RefCell<HashMap<Id, (f32, Vec<(Rect, crate::markdown::Target)>)>>,
     /// A web link clicked in a note, to open.
     pub(crate) open_url: Option<String>,
+    /// Calendar: the month showing (its first day); none is this month.
+    pub cal_month: Option<chrono::NaiveDate>,
     /// Calendar: the chosen days, `YYYY-MM-DD`.
     pub cal_days: Vec<String>,
     /// While highlighting: everything shown at full strength, and the items from the chosen days.
@@ -197,6 +201,7 @@ impl Default for Editor {
             layers_open: Default::default(),
             cropping: None,
             custom_colors: Vec::new(),
+            colour_pick: None,
             note_pictures: Default::default(),
             notes_sel: Vec::new(),
             notes_focus: false,
@@ -206,6 +211,7 @@ impl Default for Editor {
             note_scroll: HashMap::new(),
             note_view: Default::default(),
             open_url: None,
+            cal_month: None,
             cal_days: Vec::new(),
             day_shown: Default::default(),
             day_direct: Default::default(),

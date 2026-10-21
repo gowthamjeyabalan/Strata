@@ -133,4 +133,6 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
             let vr = Rect::from_min_max(to_mini(view.min), to_mini(view.max)).intersect(rect.shrink(1.0));
             painter.rect(vr, CornerRadius::same(2), p.accent.gamma_multiply(0.10), Stroke::new(1.5, p.accent), StrokeKind::Inside);
         });
+    // The window's × switches it off.
+    ed.show_overview = open;
 }
