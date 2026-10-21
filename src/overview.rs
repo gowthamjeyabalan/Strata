@@ -71,11 +71,11 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
                 if look.hidden(ed.board.objects[k].id) {
                     continue;
                 }
-                let image = if let Kind::Image { image } = ed.board.objects[k].kind { Some(image) } else { None };
+                let image = if let Kind::Image { image, .. } = ed.board.objects[k].kind { Some(image) } else { None };
                 let tex = image.and_then(|img| ed.texture(ctx, img));
                 let o = &ed.board.objects[k];
                 let r = Rect::from_min_max(to_mini(o.rect().min), to_mini(o.rect().max));
-                let ink = o.style.ink.color(p);
+                let ink = ed.board.ink_of(o).color(p);
                 match &o.kind {
                     Kind::Group { sketch: true, .. } => {}
                     Kind::Group { .. } => {
@@ -84,7 +84,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
                     }
                     Kind::Image { .. } => match tex {
                         Some(t) => {
-                            painter.image(t, r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                            painter.image(t, r, o.image_uv(), Color32::WHITE);
                         }
                         None => {
                             painter.rect_filled(r, 0.0, p.faint_bg);

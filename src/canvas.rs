@@ -18,6 +18,12 @@ const MAX_ZOOM: f32 = 16.0;
 /// Pointer tolerance for hits, in screen pixels.
 const HIT_PX: f32 = 6.0;
 const PORT_PX: f32 = 4.5;
+
+/// A port's radius on screen: full size from 100% zoom up, smaller when zoomed out so ports stay in
+/// proportion to the items.
+fn port_px(zoom: f32) -> f32 {
+    (PORT_PX * zoom).clamp(1.6, PORT_PX)
+}
 const HANDLE_PX: f32 = 9.0;
 /// Height of the page buttons' strip under the board.
 const PAGE_STRIP: f32 = 34.0;
@@ -137,14 +143,21 @@ pub enum Drag {
     Pan,
     /// `bbox` is what is being moved, as it was at the start; `exclude` is it plus the groups around
     /// it, which snapping ignores.
-    Move { start: Pos2, orig: Vec<(Id, Pos2)>, moved: bool, bbox: Rect, exclude: Vec<Id> },
+    /// `copies` pairs each original with the copy being dragged (Ctrl+drag); they are connected when
+    /// it is dropped.
+    Move { start: Pos2, orig: Vec<(Id, Pos2)>, moved: bool, bbox: Rect, exclude: Vec<Id>, copies: Vec<(Id, Id)> },
     Resize { id: Id, orig: Rect, handle: Handle, aspect: Option<f32> },
     /// Dragging the corner-radius diamond.
     Radius { id: Id },
+    /// Turning an item about its centre by its handle.
+    Rotate { id: Id, center: Pos2, start: f32, orig: f32 },
+    /// Cropping an image: `full` is the whole picture in world space.
+    Crop { id: Id, orig: Rect, handle: Handle, full: Rect },
     Marquee { start: Pos2, end: Pos2, add: bool },
     Draw { points: Vec<Pos2> },
     Segment { start: Pos2, end: Pos2, arrow: bool },
-    Box { start: Pos2, end: Pos2 },
+    /// A box being drawn; the arrow keys split it into a grid of `cols` by `rows` items.
+    Box { start: Pos2, end: Pos2, cols: u32, rows: u32 },
     /// A new connection. `from_side` is `None` when it started on the body rather than a port.
     Wire { from: Id, from_side: Option<Side>, end: Pos2 },
     Erase { erased: bool },
@@ -154,6 +167,21 @@ fn snap45(start: Pos2, end: Pos2) -> Pos2 {
     let d = end - start;
     let a = (d.y.atan2(d.x) / std::f32::consts::FRAC_PI_4).round() * std::f32::consts::FRAC_PI_4;
     start + vec2(a.cos(), a.sin()) * d.length()
+}
+
+/// `r` split into `cols` by `rows` cells with a gap between them.
+fn grid_cells(r: Rect, cols: u32, rows: u32) -> Vec<Rect> {
+    let (cols, rows) = (cols.max(1), rows.max(1));
+    let gap = if cols > 1 || rows > 1 { (r.width().min(r.height()) * 0.06).clamp(4.0, 40.0) } else { 0.0 };
+    let w = (r.width() - gap * (cols - 1) as f32) / cols as f32;
+    let h = (r.height() - gap * (rows - 1) as f32) / rows as f32;
+    let mut out = Vec::new();
+    for row in 0..rows {
+        for col in 0..cols {
+            out.push(Rect::from_min_size(r.min + vec2(col as f32 * (w + gap), row as f32 * (h + gap)), vec2(w.max(1.0), h.max(1.0))));
+        }
+    }
+    out
 }
 
 /// A frame dragged from `start` to `end`; with `slide` it keeps a 16:9 shape.
@@ -189,7 +217,7 @@ impl Editor {
 
     /// The port under a world point, topmost object first.
     fn port_hit(&self, w: Pos2, except: Option<Id>) -> Option<(Id, Side)> {
-        let r = (PORT_PX + 5.0) / self.camera.zoom;
+        let r = (port_px(self.camera.zoom) + 5.0) / self.camera.zoom;
         let hidden = self.board.hidden_set();
         let inner = self.board.sketch_inner();
         self.board
@@ -204,20 +232,43 @@ impl Editor {
     fn handles(&self, o: &Object) -> [(Handle, Pos2); 8] {
         let r = self.camera.rect_to_screen(self.canvas_rect.min, o.rect()).expand(6.0);
         let c = r.center();
+        let t = |q: Pos2| board::rotate_about(q, c, o.rotation);
         [
-            (Handle::NW, r.left_top()),
-            (Handle::N, pos2(c.x, r.top())),
-            (Handle::NE, r.right_top()),
-            (Handle::E, pos2(r.right(), c.y)),
-            (Handle::SE, r.right_bottom()),
-            (Handle::S, pos2(c.x, r.bottom())),
-            (Handle::SW, r.left_bottom()),
-            (Handle::W, pos2(r.left(), c.y)),
+            (Handle::NW, t(r.left_top())),
+            (Handle::N, t(pos2(c.x, r.top()))),
+            (Handle::NE, t(r.right_top())),
+            (Handle::E, t(pos2(r.right(), c.y))),
+            (Handle::SE, t(r.right_bottom())),
+            (Handle::S, t(pos2(c.x, r.bottom()))),
+            (Handle::SW, t(r.left_bottom())),
+            (Handle::W, t(pos2(r.left(), c.y))),
         ]
     }
 
+    /// Can this item be turned? Not groups, frames or locked items.
+    fn rotatable(&self, o: &Object) -> bool {
+        !self.is_locked(o.id) && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. })
+    }
+
+    /// The round handle above a single selected item that turns it.
+    fn rotate_handle(&self) -> Option<(Id, Pos2)> {
+        if self.selection.len() != 1 || self.is_editing() || self.cropping.is_some() {
+            return None;
+        }
+        let o = self.board.get(self.selection[0]).filter(|o| self.rotatable(o))?;
+        let r = self.camera.rect_to_screen(self.canvas_rect.min, o.rect());
+        Some((o.id, board::rotate_about(pos2(r.center().x, r.top() - 28.0), r.center(), o.rotation)))
+    }
+
+    /// A screen polygon of an item's outline, turned with it.
+    fn outline_screen(&self, origin: Pos2, o: &Object, grow: f32) -> Vec<Pos2> {
+        let r = self.camera.rect_to_screen(origin, o.rect()).expand(grow);
+        let c = r.center();
+        [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].into_iter().map(|q| board::rotate_about(q, c, o.rotation)).collect()
+    }
+
     fn resizable(o: &Object) -> bool {
-        !o.locked && !matches!(o.kind, Kind::Text | Kind::Group { sketch: false, .. })
+        !o.locked && !matches!(o.kind, Kind::Group { sketch: false, .. })
     }
 
     /// The single selected shape whose corners can be rounded, with its corner radius in world units.
@@ -260,7 +311,7 @@ impl Editor {
     fn chevron_rect(&self, o: &Object) -> Rect {
         let r = self.camera.rect_to_screen(self.canvas_rect.min, o.rect());
         let z = self.camera.zoom;
-        let size = (o.style.font_size * z).clamp(10.0, 40.0);
+        let size = (board::group_font(o.rect().width()) * z).clamp(8.0, 160.0);
         Rect::from_min_size(r.min + vec2(10.0, 9.0) * z, vec2(size, size))
     }
 
@@ -325,7 +376,7 @@ impl Editor {
             return;
         };
         let ink = match &o.kind {
-            Kind::Image { image } => {
+            Kind::Image { image, .. } => {
                 let px = self.board.images.get(image).and_then(|a| image::load_from_memory(&a.bytes).ok()).map(|img| {
                     let r = o.rect();
                     let u = ((w.x - r.left()) / r.width()).clamp(0.0, 0.999);
@@ -367,7 +418,7 @@ impl Editor {
     fn erase_at(&mut self, w: Pos2) -> bool {
         let tol = 8.0 / self.camera.zoom;
         let hidden = self.board.hidden_set();
-        let ids: Vec<Id> = self.board.objects.iter().filter(|o| matches!(o.kind, Kind::Path { .. }) && !o.locked && !hidden.contains(&o.id) && o.hit(w, tol)).map(|o| o.id).collect();
+        let ids: Vec<Id> = self.board.objects.iter().filter(|o| matches!(o.kind, Kind::Path { .. }) && !o.locked && !self.board.layer_of(o).is_some_and(|l| l.locked) && !hidden.contains(&o.id) && o.hit(w, tol)).map(|o| o.id).collect();
         if ids.is_empty() {
             return false;
         }
@@ -384,6 +435,33 @@ impl Editor {
             Tool::Node => Some(self.node_shape),
             _ => None,
         }
+    }
+
+    /// A grid of the current tool's items filling `r`, `cols` across and `rows` down (arrow keys while
+    /// drawing a box). They are all selected.
+    fn create_grid(&mut self, r: Rect, cols: u32, rows: u32) {
+        self.mark_changed();
+        let mut made = Vec::new();
+        for cell in grid_cells(r, cols, rows) {
+            let id = match self.tool {
+                Tool::Frame => {
+                    self.create_frame(cell);
+                    self.selection.first().copied()
+                }
+                Tool::Text => Some(self.board.add(Rect::from_min_size(cell.min, vec2(cell.width().max(40.0), self.style.font_size * 1.4)), Kind::Text, self.style)),
+                _ => {
+                    let mut style = self.style;
+                    if self.tool == Tool::Node {
+                        style.fill = true;
+                    }
+                    self.tool_shape().map(|shape| self.board.add(cell, Kind::Shape { shape }, style))
+                }
+            };
+            made.extend(id);
+        }
+        self.say(format!("Made a grid of {} × {}", cols, rows));
+        self.selection = made;
+        self.selected_wire = None;
     }
 
     /// A new frame, named and numbered after the page's last one, behind everything.
@@ -471,6 +549,34 @@ impl Editor {
         self.selected_wire = None;
     }
 
+    /// Start cropping an image: its handles crop instead of resize.
+    pub fn start_crop(&mut self, id: Id) {
+        if self.board.get(id).is_some_and(|o| o.rotation.abs() > 1e-4) {
+            self.say("Turn the image back to 0° to crop it (Properties > Rotation)");
+            return;
+        }
+        if self.is_locked(id) {
+            return;
+        }
+        self.finish_edit();
+        self.selection = vec![id];
+        self.selected_wire = None;
+        self.cropping = Some(id);
+        self.say("Drag the handles to crop. Enter, Esc or a click elsewhere when done.");
+    }
+
+    /// Enter or Esc ends cropping. Returns true if a key was used.
+    pub fn crop_keys(&mut self, ctx: &egui::Context) -> bool {
+        if self.cropping.is_none() {
+            return false;
+        }
+        let done = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape));
+        if done {
+            self.cropping = None;
+        }
+        done
+    }
+
     /// Enter finishes the polyline, Esc drops it, Backspace takes back the last point. Returns true if
     /// a key was used.
     pub fn poly_keys(&mut self, ctx: &egui::Context) -> bool {
@@ -498,7 +604,20 @@ impl Editor {
         self.drag = match self.tool {
             _ if self.eyedropper.is_some() => Drag::None,
             Tool::Select => {
-                if let Some(id) = self.radius_handle_hit(w) {
+                let s = self.camera.to_screen(self.canvas_rect.min, w);
+                // Any drag away from the image being cropped ends the cropping.
+                let crop_handle = self.cropping.and_then(|cid| self.resize_handle_hit(w).filter(|(id, _)| *id == cid));
+                if self.cropping.is_some() && crop_handle.is_none() {
+                    self.cropping = None;
+                }
+                if let Some((id, handle)) = crop_handle {
+                    let o = self.board.get(id).unwrap();
+                    Drag::Crop { id, orig: o.rect(), handle, full: o.image_full_rect() }
+                } else if let Some((id, _)) = self.rotate_handle().filter(|(_, h)| h.distance(s) <= 9.0) {
+                    let center = self.board.get(id).map(|o| o.rect().center()).unwrap_or(w);
+                    let orig = self.board.get(id).map(|o| o.rotation).unwrap_or(0.0);
+                    Drag::Rotate { id, center, start: (w - center).angle(), orig }
+                } else if let Some(id) = self.radius_handle_hit(w) {
                     Drag::Radius { id }
                 } else if let Some((id, handle)) = self.resize_handle_hit(w) {
                     let o = self.board.get(id).unwrap();
@@ -516,6 +635,8 @@ impl Editor {
                         }
                     }
                     self.selected_wire = None;
+                    // Ctrl+drag drags a copy, which is connected to its original when dropped.
+                    let copies = if mods.command { self.copy_in_place() } else { Vec::new() };
                     // Moving a group moves everything in it. Locked items stay where they are.
                     let unlocked: Vec<Id> = self.selection.iter().copied().filter(|id| !self.is_locked(*id)).collect();
                     let mut ids = self.board.with_descendants(&unlocked);
@@ -535,7 +656,7 @@ impl Editor {
                     }
                     let bbox = unlocked.iter().filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b)).unwrap_or(Rect::NOTHING);
                     let exclude = self.snap_exclude(&unlocked);
-                    Drag::Move { start: w, orig, moved: false, bbox, exclude }
+                    Drag::Move { start: w, orig, moved: false, bbox, exclude, copies }
                 } else {
                     if !mods.shift {
                         self.clear_selection();
@@ -548,7 +669,7 @@ impl Editor {
             Tool::Eraser => Drag::Erase { erased: self.erase_at(w) },
             Tool::Line | Tool::Arrow => Drag::Segment { start: w, end: w, arrow: self.tool == Tool::Arrow },
             Tool::Polyline => Drag::None,
-            Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text | Tool::Frame => Drag::Box { start: w, end: w },
+            Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text | Tool::Frame => Drag::Box { start: w, end: w, cols: 1, rows: 1 },
             Tool::Connect => match self.port_hit(w, None) {
                 Some((id, side)) => Drag::Wire { from: id, from_side: Some(side), end: w },
                 None => match self.board.hit(w, tol) {
@@ -618,6 +739,54 @@ impl Editor {
                     }
                 }
                 *moved = true;
+            }
+            Drag::Resize { id, orig, handle, aspect } if self.board.get(*id).is_some_and(|o| o.rotation.abs() > 1e-4) => {
+                let (o0, h) = (*orig, *handle);
+                let rot = self.board.get(*id).map(|o| o.rotation).unwrap_or(0.0);
+                let local = board::rotate_about(w, o0.center(), -rot);
+                let r = h.apply(o0, local, 4.0 / zoom);
+                // The point opposite the handle stays where it was on screen.
+                let anchor = |r: Rect| match h {
+                    Handle::NW => r.right_bottom(),
+                    Handle::N => pos2(r.center().x, r.bottom()),
+                    Handle::NE => r.left_bottom(),
+                    Handle::E => pos2(r.left(), r.center().y),
+                    Handle::SE => r.left_top(),
+                    Handle::S => pos2(r.center().x, r.top()),
+                    Handle::SW => r.right_top(),
+                    Handle::W => pos2(r.right(), r.center().y),
+                };
+                let want = board::rotate_about(anchor(o0), o0.center(), rot);
+                let got = board::rotate_about(anchor(r), r.center(), rot);
+                let r = r.translate(want - got);
+                if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == *id) {
+                    o.set_rect(r);
+                }
+            }
+            Drag::Rotate { id, center, start, orig } => {
+                let mut a = *orig + ((w - *center).angle() - *start);
+                if mods.shift {
+                    let step = 15f32.to_radians();
+                    a = (a / step).round() * step;
+                }
+                // Keep it between -180° and 180°.
+                a = (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == *id) {
+                    o.rotation = a;
+                }
+            }
+            Drag::Crop { id, orig, handle, full } => {
+                let r = handle.apply(*orig, w, 4.0 / zoom).intersect(*full);
+                if r.width() > 1.0 && r.height() > 1.0 {
+                    let f = *full;
+                    let crop = [(r.min.x - f.min.x) / f.width(), (r.min.y - f.min.y) / f.height(), (r.max.x - f.min.x) / f.width(), (r.max.y - f.min.y) / f.height()];
+                    if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == *id) {
+                        o.set_rect(r);
+                        if let Kind::Image { crop: c, .. } = &mut o.kind {
+                            *c = Some(crop);
+                        }
+                    }
+                }
             }
             Drag::Resize { id, orig, handle, aspect } => {
                 let o0 = *orig;
@@ -690,23 +859,37 @@ impl Editor {
         self.guides.clear();
         match std::mem::take(&mut self.drag) {
             Drag::None | Drag::Pan => {}
-            Drag::Move { moved, orig, .. } => {
+            Drag::Move { moved, orig, copies, .. } => {
                 if moved && !orig.is_empty() {
                     self.mark_changed();
                 }
+                // Each copy is connected to its original, on the sides that face each other.
+                let mut joined = 0;
+                for (a, b) in copies {
+                    let (Some(ra), Some(rb)) = (self.board.get(a).map(|o| o.rect()), self.board.get(b).map(|o| o.rect())) else { continue };
+                    if self.board.connect(a, Side::facing(ra, rb.center()), b, Side::facing(rb, ra.center()), self.wire_style).is_some() {
+                        joined += 1;
+                    }
+                }
+                if joined > 0 {
+                    self.mark_changed();
+                    self.say(format!("Copied and connected {}", crate::editor::plural(joined, "item", "items")));
+                }
             }
-            Drag::Resize { .. } | Drag::Radius { .. } => self.mark_changed(),
+            Drag::Resize { .. } | Drag::Radius { .. } | Drag::Rotate { .. } | Drag::Crop { .. } => self.mark_changed(),
             Drag::Marquee { start, end, add } => {
                 let r = Rect::from_two_pos(start, end);
                 let hidden = self.board.hidden_set();
                 let inner = self.board.sketch_inner();
-                // Groups need to be fully inside the box; anything else (a sketch too) only has to touch it.
+                // Dragged left to right: a window, picking what is wholly inside it. Right to left: a
+                // crossing box, picking whatever it touches.
+                let window = end.x >= start.x;
                 let hits: Vec<Id> = self
                     .board
                     .objects
                     .iter()
                     .filter(|o| !hidden.contains(&o.id) && !inner.contains(&o.id))
-                    .filter(|o| if o.is_group() && !o.is_sketch() { r.contains_rect(o.rect()) } else { r.intersects(o.rect().expand(0.5)) })
+                    .filter(|o| if window { r.contains_rect(o.rect()) } else { r.intersects(o.rect().expand(0.5)) })
                     .map(|o| o.id)
                     .collect();
                 if !add {
@@ -724,10 +907,12 @@ impl Editor {
                     self.create_path(vec![start, end], arrow, None);
                 }
             }
-            Drag::Box { start, end } => {
+            Drag::Box { start, end, cols, rows } => {
                 let r = if self.tool == Tool::Frame { frame_rect(start, end, mods.shift) } else { box_rect(start, end, mods.shift) };
                 if r.width() * zoom < 6.0 && r.height() * zoom < 6.0 {
                     self.click(start, mods);
+                } else if cols > 1 || rows > 1 {
+                    self.create_grid(r, cols, rows);
                 } else if self.tool == Tool::Frame {
                     self.create_frame(r);
                 } else if self.tool == Tool::Text {
@@ -767,6 +952,11 @@ impl Editor {
         let tol = self.tol();
         match self.tool {
             Tool::Select | Tool::Connect => {
+                if let Some(cid) = self.cropping {
+                    if self.board.hit(w, tol) != Some(cid) {
+                        self.cropping = None;
+                    }
+                }
                 let s = self.camera.to_screen(self.canvas_rect.min, w);
                 let target = self.board.hit(w, tol).and_then(|id| match self.board.get(id).map(|o| &o.kind) {
                     Some(Kind::Note { note }) => self.note_view.borrow().get(&id).and_then(|v| v.1.iter().find(|(r, _)| r.contains(s)).map(|(_, t)| (*note, t.clone()))),
@@ -832,6 +1022,10 @@ impl Editor {
         if self.tool != Tool::Select {
             return;
         }
+        if let Some(id) = self.board.hit(w, self.tol()).filter(|id| matches!(self.board.get(*id).map(|o| &o.kind), Some(Kind::Image { .. }))) {
+            self.start_crop(id);
+            return;
+        }
         if let Some(id) = self.board.hit(w, self.tol()) {
             self.start_edit(id);
         } else if let Some(wid) = self.wire_hit(w) {
@@ -863,8 +1057,9 @@ impl Editor {
         let ctx = ui.ctx().clone();
         let p = pal(&ctx);
         let full = ui.available_rect_before_wrap();
-        // A strip along the bottom holds the page buttons; the board is the rest.
-        let strip = Rect::from_min_max(pos2(full.left(), full.bottom() - PAGE_STRIP), full.max);
+        // Along the bottom: the page buttons, and under them the date roller. The board is the rest.
+        let roller = Rect::from_min_max(pos2(full.left(), full.bottom() - crate::calendar::ROLLER), full.max);
+        let strip = Rect::from_min_max(pos2(full.left(), roller.top() - PAGE_STRIP), pos2(full.right(), roller.top()));
         let rect = Rect::from_min_max(full.min, pos2(full.right(), strip.top()));
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         self.canvas_rect = rect;
@@ -1021,6 +1216,28 @@ impl Editor {
             }
         }
 
+        if let Drag::Box { cols, rows, .. } = &mut self.drag {
+            ui.input(|i| {
+                if i.key_pressed(Key::ArrowRight) {
+                    *cols = (*cols + 1).min(40);
+                }
+                if i.key_pressed(Key::ArrowLeft) {
+                    *cols = cols.saturating_sub(1).max(1);
+                }
+                if i.key_pressed(Key::ArrowUp) {
+                    *rows = (*rows + 1).min(40);
+                }
+                if i.key_pressed(Key::ArrowDown) {
+                    *rows = rows.saturating_sub(1).max(1);
+                }
+            });
+        }
+        if let Drag::Marquee { start, end, .. } = &self.drag {
+            let hint = if end.x >= start.x { "Window: selects what is wholly inside" } else { "Crossing: selects whatever it touches" };
+            if self.status.as_ref().is_none_or(|(m, _)| m != hint) {
+                self.say(hint);
+            }
+        }
         if let Some(url) = self.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
@@ -1043,6 +1260,7 @@ impl Editor {
             } else {
                 match self.tool {
                     Tool::Select if self.radius_handle_hit(w).is_some() || matches!(self.drag, Drag::Radius { .. }) => CursorIcon::ResizeHorizontal,
+                    Tool::Select if matches!(self.drag, Drag::Rotate { .. }) || self.rotate_handle().is_some_and(|(_, h)| h.distance(self.camera.to_screen(self.canvas_rect.min, w)) <= 9.0) => CursorIcon::Grab,
                     Tool::Select if self.resize_handle_hit(w).is_some() => self.resize_handle_hit(w).map(|(_, h)| h.cursor()).unwrap_or_default(),
                     Tool::Select if self.port_hit(w, None).is_some() => CursorIcon::Crosshair,
                     Tool::Select if matches!(self.drag, Drag::Move { .. }) => CursorIcon::Move,
@@ -1086,6 +1304,7 @@ impl Editor {
 
         self.edit_overlay(ui, origin, p);
         self.page_strip(ui, strip, p);
+        crate::calendar::date_roller(ui, self, roller);
     }
 
     /// Presenting: the current frame fills the screen. Arrow keys, Space, Page Up/Down or a click move
@@ -1138,7 +1357,7 @@ impl Editor {
     /// The page buttons: click one to show it, double-click to rename it, + adds a page, and the ×
     /// on a hovered page deletes it (with what is on it; undo brings it back).
     fn page_strip(&mut self, ui: &mut Ui, strip: Rect, p: &Pal) {
-        ui.painter().rect_filled(strip, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, p.bg);
+        ui.painter().rect_filled(strip, CornerRadius::ZERO, p.bg);
         ui.painter().line_segment([strip.left_top(), strip.right_top()], Stroke::new(1.0, p.hairline));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(strip.shrink2(vec2(8.0, 5.0))).layout(egui::Layout::left_to_right(Align::Center)));
         let ui = &mut child;
@@ -1207,7 +1426,7 @@ impl Editor {
         for k in order {
             let (id, kind_image) = {
                 let o = &self.board.objects[k];
-                (o.id, if let Kind::Image { image } = o.kind { Some(image) } else { None })
+                (o.id, if let Kind::Image { image, .. } = o.kind { Some(image) } else { None })
             };
             if look.hidden(id) {
                 continue;
@@ -1217,7 +1436,10 @@ impl Editor {
             if !painter.clip_rect().intersects(self.camera.rect_to_screen(origin, o.rect()).expand(40.0)) {
                 continue;
             }
-            if let Some(h) = self.draw_object(painter, origin, o, p, tex, self.editing == Some(id)) {
+            // A turned item is drawn as usual, then turned (paths turn their own points).
+            let turned = o.rotation.abs() > 1e-4 && !matches!(o.kind, Kind::Path { .. } | Kind::Group { .. } | Kind::Frame { .. });
+            let h = if turned { self.draw_rotated(ctx, painter, origin, o, p, tex, self.editing == Some(id)) } else { self.draw_object(painter, origin, o, p, tex, self.editing == Some(id)) };
+            if let Some(h) = h {
                 text_heights.push((id, h));
             }
         }
@@ -1229,6 +1451,26 @@ impl Editor {
         // Wires on top of objects so they are never hidden behind a group or an image.
         self.draw_note_links(painter, origin, p, look);
         self.draw_wires(painter, origin, p, look);
+    }
+
+    /// Draw an item, then turn everything it drew about its centre: it is drawn onto a layer of its
+    /// own, made into triangles, and the triangles are turned and added to `painter`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_rotated(&self, ctx: &egui::Context, painter: &Painter, origin: Pos2, o: &Object, p: &Pal, tex: Option<egui::TextureId>, editing: bool) -> Option<f32> {
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::new(("turned", o.id)));
+        let tmp = Painter::new(ctx.clone(), layer, Rect::EVERYTHING);
+        let h = self.draw_object(&tmp, origin, o, p, tex, editing);
+        let shapes: Vec<egui::epaint::ClippedShape> = ctx.graphics_mut(|g| std::mem::take(g.entry(layer))).all_entries().cloned().collect();
+        let c = self.camera.to_screen(origin, o.rect().center());
+        for prim in ctx.tessellate(shapes, ctx.pixels_per_point()) {
+            if let egui::epaint::Primitive::Mesh(mut m) = prim.primitive {
+                for v in &mut m.vertices {
+                    v.pos = board::rotate_about(v.pos, c, o.rotation);
+                }
+                painter.add(egui::Shape::mesh(m));
+            }
+        }
+        h
     }
 
     /// Dotted lines between the cards of notes that link to each other with `[[Name]]`.
@@ -1371,14 +1613,14 @@ impl Editor {
             }
             let selected = self.selected_wire == Some(w.id);
             let on = selected || self.selection.contains(&w.from) || self.selection.contains(&w.to);
-            let color = if on { p.accent } else { p.text_secondary };
+            let color = if on { p.accent } else { w.color.map(|c| c.color(p)).unwrap_or(p.text_secondary) };
             let s = thin(pts.iter().map(|q| self.camera.to_screen(origin, *q)), 1.5);
             let end = s[s.len() - 1];
             painter.add(egui::Shape::line(s, Stroke::new(if selected { width + 1.0 } else { width }, color)));
             // The arrow stops at the port's edge so the port stays visible.
-            let n = w.to_side.normal();
+            let n = look.get(&self.board, look.proxy(w.to)).map(|o| o.port_normal(w.to_side)).unwrap_or(w.to_side.normal());
             let size = (7.0 * z.sqrt()).clamp(5.0, 10.0);
-            arrow_tip(painter, end + n * (PORT_PX + 1.0), -n, size, color);
+            arrow_tip(painter, end + n * (port_px(z) + 1.0), -n, size, color);
             if !w.label.is_empty() && self.editing_wire != Some(w.id) {
                 let mid = self.camera.to_screen(origin, board::midpoint(&pts));
                 let g = painter.layout_no_wrap(w.label.clone(), FontId::proportional(wire_font(z)), if on { p.accent_text } else { p.text });
@@ -1398,14 +1640,14 @@ impl Editor {
         let faded = !self.day_shown.is_empty() && !self.day_shown.contains(&o.id);
         let alpha = o.opacity.clamp(0.05, 1.0) * if faded { 0.18 } else { 1.0 };
         let fade = |c: Color32| if alpha >= 1.0 { c } else { c.gamma_multiply(alpha) };
-        let ink = fade(o.style.ink.color(p));
+        let ink = fade(self.board.ink_of(o).color(p));
         let stroke = Stroke::new((o.style.width * z).max(0.75), ink);
         let font = FontId::proportional(quantize_font(o.style.font_size * z));
         match &o.kind {
             Kind::Image { .. } => {
                 match tex {
                     Some(t) => {
-                        painter.image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), fade(Color32::WHITE));
+                        painter.image(t, r, o.image_uv(), fade(Color32::WHITE));
                     }
                     None => {
                         painter.rect(r, 6.0, p.faint_bg, Stroke::new(1.0, p.hairline), StrokeKind::Inside);
@@ -1417,7 +1659,7 @@ impl Editor {
             Kind::Path { arrow, brush, closed, .. } => {
                 let pts: Vec<Pos2> = o.line_points().into_iter().map(|q| self.camera.to_screen(origin, q)).collect();
                 if *closed && o.style.fill {
-                    let (look, _) = look_of(o, p, z, fade);
+                    let (look, _) = look_of(o, self.board.ink_of(o), p, z, fade);
                     if let shapes::Fill::Solid(c) | shapes::Fill::Gradient(c, _) = look.fill {
                         shapes::fill_polygon(painter, &pts, c);
                     }
@@ -1437,10 +1679,11 @@ impl Editor {
                 self.draw_caption(painter, r, o, fade(p.text_secondary), editing);
             }
             Kind::Shape { shape } => {
-                let (look, text) = look_of(o, p, z, fade);
+                let (look, text) = look_of(o, self.board.ink_of(o), p, z, fade);
                 shapes::paint(painter, *shape, r, z, &look);
                 if !editing && !o.label.is_empty() && font.size >= 2.0 {
-                    let wrap = (r.width() - 16.0 * z).max(8.0);
+                    let k = font.size / (o.style.font_size * z).max(0.01);
+                    let wrap = ((r.width() - 16.0 * z) * k).max(8.0);
                     let mut job = egui::text::LayoutJob::simple(o.label.clone(), font, text, wrap);
                     job.halign = Align::Center;
                     let g = painter.layout_job(job);
@@ -1477,7 +1720,8 @@ impl Editor {
                     Some(n) if inner.width() > 4.0 && inner.height() > 4.0 => {
                         let clipped = painter.with_clip_rect(inner.expand(2.0).intersect(painter.clip_rect()));
                         let blocks = self.note_blocks(&n.text);
-                        crate::markdown::paint(&clipped, &blocks, inner.min - vec2(0.0, scroll), inner.width(), z, p, text_color)
+                        let ctx = painter.ctx().clone();
+                        crate::markdown::paint(&clipped, &blocks, inner.min - vec2(0.0, scroll), inner.width(), z, p, text_color, &|src| self.note_picture(&ctx, src))
                     }
                     Some(_) => (0.0, Vec::new()),
                     None => {
@@ -1500,8 +1744,11 @@ impl Editor {
                 if editing {
                     return None;
                 }
-                let g = painter.layout(o.label.clone(), font, ink, r.width().max(8.0));
-                let h = g.size().y / z;
+                // The font size is rounded to half pixels; the wrap width is scaled the same way so the
+                // line breaks do not jump as the board zooms.
+                let k = font.size / (o.style.font_size * z).max(0.01);
+                let g = painter.layout(o.label.clone(), font, ink, (r.width() * k).max(8.0));
+                let h = g.size().y / (z * k).max(1e-4);
                 painter.galley(r.min, g, ink);
                 if (h - o.rect[3]).abs() > 0.5 && h > 0.0 {
                     return Some(h);
@@ -1513,7 +1760,7 @@ impl Editor {
                 let c = fade(group_color(o, p));
                 let gs = Stroke::new((o.style.width * z * 0.75).clamp(1.0, 4.0), c.gamma_multiply(0.85));
                 let radius = CornerRadius::same((12.0 * z).clamp(2.0, 30.0) as u8);
-                let size = quantize_font(o.style.font_size * z);
+                let size = quantize_font(board::group_font(o.rect().width()) * z);
                 if *collapsed {
                     // A compact node standing in for everything inside.
                     boxed(painter, r, radius, c.gamma_multiply(if o.style.fill { 0.18 } else { 0.06 }), Stroke::new(gs.width.max(1.5), c), StrokeKind::Inside);
@@ -1581,10 +1828,11 @@ impl Editor {
                 if !painter.clip_rect().contains(s) {
                     continue;
                 }
-                let near = hover_w.is_some_and(|h| h.distance(pos) * self.camera.zoom <= PORT_PX + 5.0);
+                let pr = port_px(self.camera.zoom);
+                let near = hover_w.is_some_and(|h| h.distance(pos) * self.camera.zoom <= pr + 5.0);
                 let is_target = target == Some((o.id, side));
                 let color = if near || is_target { p.accent } else { p.text_secondary };
-                let r = if near || is_target { PORT_PX + 1.5 } else { PORT_PX };
+                let r = if near || is_target { pr + 1.5 } else { pr };
                 painter.circle(s, r, if wired || is_target { color } else { p.canvas }, Stroke::new(1.5, color));
             }
         }
@@ -1599,8 +1847,35 @@ impl Editor {
         }
         for id in self.selection.iter().filter(|id| !look.hidden(**id)) {
             let Some(o) = look.get(&self.board, *id) else { continue };
-            let r = self.camera.rect_to_screen(origin, o.rect()).expand(4.0);
-            painter.rect_stroke(r, 6.0, Stroke::new(1.0, p.accent), StrokeKind::Middle);
+            if o.rotation.abs() > 1e-4 {
+                painter.add(egui::Shape::closed_line(self.outline_screen(origin, o, 4.0), Stroke::new(1.0, p.accent)));
+            } else {
+                let r = self.camera.rect_to_screen(origin, o.rect()).expand(4.0);
+                painter.rect_stroke(r, 6.0, Stroke::new(1.0, p.accent), StrokeKind::Middle);
+            }
+        }
+        // The turning handle: a stem from the top edge to a round grip.
+        if let Some((id, h)) = self.rotate_handle() {
+            if let Some(o) = self.board.get(id) {
+                let r = self.camera.rect_to_screen(origin, o.rect());
+                let top = board::rotate_about(pos2(r.center().x, r.top() - 6.0), r.center(), o.rotation);
+                painter.line_segment([top, h], Stroke::new(1.0, p.accent));
+                painter.circle(h, 5.5, Color32::WHITE, Stroke::new(1.2, p.accent));
+                painter.add(egui::Shape::line((0..=10).map(|k| { let a = -2.4 + 3.6 * k as f32 / 10.0; h + vec2(a.cos(), a.sin()) * 2.6 }).collect(), Stroke::new(1.0, p.accent)));
+            }
+        }
+        // While cropping: the whole picture faintly, the part kept as it is, and its edge.
+        if let Some(cid) = self.cropping {
+            if let Some((o, Kind::Image { image, .. })) = self.board.get(cid).map(|o| (o, o.kind.clone())) {
+                if let Some(Some(t)) = self.textures.get(&image).map(|t| t.as_ref().map(|t| t.id())) {
+                    let full = self.camera.rect_to_screen(origin, o.image_full_rect());
+                    let kept = self.camera.rect_to_screen(origin, o.rect());
+                    painter.image(t, full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(0.3));
+                    painter.image(t, kept, o.image_uv(), Color32::WHITE);
+                    painter.rect_stroke(full, 0.0, Stroke::new(1.0, p.hairline), StrokeKind::Middle);
+                    painter.rect_stroke(kept, 0.0, Stroke::new(1.5, p.accent), StrokeKind::Middle);
+                }
+            }
         }
         if self.selection.len() == 1 && !self.is_editing() {
             if let Some(o) = self.board.get(self.selection[0]).filter(|o| Self::resizable(o)) {
@@ -1651,7 +1926,16 @@ impl Editor {
         match &self.drag {
             Drag::Marquee { start, end, .. } => {
                 let r = Rect::from_two_pos(to_s(*start), to_s(*end));
-                painter.rect(r, 2.0, p.accent.gamma_multiply(0.12), Stroke::new(1.0, p.accent), StrokeKind::Middle);
+                if end.x >= start.x {
+                    // A window: solid blue.
+                    painter.rect(r, 2.0, p.accent.gamma_multiply(0.12), Stroke::new(1.0, p.accent), StrokeKind::Middle);
+                } else {
+                    // A crossing box: dashed green.
+                    let green = Color32::from_rgb(89, 161, 79);
+                    painter.rect_filled(r, 2.0, green.gamma_multiply(0.12));
+                    let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+                    painter.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, green), 5.0, 4.0));
+                }
             }
             Drag::Draw { points } => {
                 if let Some(b) = self.tool.brush() {
@@ -1667,18 +1951,24 @@ impl Editor {
                     arrow_head(painter, b, (b - a).normalized(), (8.0 + self.style.width * 2.5) * z, stroke);
                 }
             }
-            Drag::Box { start, end } => {
+            Drag::Box { start, end, cols, rows } => {
                 let mods = painter.ctx().input(|i| i.modifiers);
                 let wr = if self.tool == Tool::Frame { frame_rect(*start, *end, mods.shift) } else { box_rect(*start, *end, mods.shift) };
-                let r = Rect::from_two_pos(to_s(wr.min), to_s(wr.max));
-                match self.tool_shape() {
-                    Some(shape) => {
-                        let f = if self.tool == Tool::Node { ink.gamma_multiply(0.16) } else { Color32::TRANSPARENT };
-                        paint_shape(painter, shape, r, z, f, stroke);
+                for cell in grid_cells(wr, *cols, *rows) {
+                    let r = Rect::from_two_pos(to_s(cell.min), to_s(cell.max));
+                    match self.tool_shape() {
+                        Some(shape) => {
+                            let f = if self.tool == Tool::Node { ink.gamma_multiply(0.16) } else { Color32::TRANSPARENT };
+                            paint_shape(painter, shape, r, z, f, stroke);
+                        }
+                        None => {
+                            painter.rect_stroke(r, 2.0, Stroke::new(1.0, p.accent), StrokeKind::Middle);
+                        }
                     }
-                    None => {
-                        painter.rect_stroke(r, 2.0, Stroke::new(1.0, p.accent), StrokeKind::Middle);
-                    }
+                }
+                if *cols > 1 || *rows > 1 {
+                    let r = Rect::from_two_pos(to_s(wr.min), to_s(wr.max));
+                    painter.text(r.right_bottom() + vec2(6.0, 6.0), egui::Align2::LEFT_TOP, format!("{cols} × {rows}"), FontId::proportional(12.0), p.accent_text);
                 }
             }
             Drag::Wire { from, from_side, end } => {
@@ -1726,6 +2016,7 @@ impl Editor {
                 Kind::Shape { .. } => (r.shrink2(vec2(8.0 * z, 4.0 * z)), FontId::proportional(size), p.text, true),
                 Kind::Frame { .. } => (Rect::from_min_size(r.left_top() - vec2(0.0, 22.0), vec2(r.width().clamp(120.0, 320.0), 18.0)), FontId::proportional(12.0), p.text, false),
                 Kind::Group { sketch: false, .. } => {
+                    let size = quantize_font(board::group_font(o.rect().width()) * z);
                     let pos = group_name_pos(r, z, size);
                     (Rect::from_min_size(pos, vec2((r.width() - 24.0 * z).max(80.0), size * 1.3)), FontId::new(size, theme::semibold_family()), group_color(o, p), false)
                 }
@@ -1804,7 +2095,7 @@ fn boxed(painter: &Painter, r: Rect, radius: CornerRadius, fill: Color32, stroke
 
 /// Where a group's name starts: right of its collapse arrow. `size` is the name's font size in pixels.
 fn group_name_pos(r: Rect, z: f32, size: f32) -> Pos2 {
-    r.min + vec2(10.0 * z + size.clamp(10.0, 40.0) + 4.0, 9.0 * z)
+    r.min + vec2(10.0 * z + size.max(8.0) + 4.0, 9.0 * z)
 }
 
 /// The collapse arrow: pointing right when collapsed, down when open.
@@ -1861,9 +2152,9 @@ pub fn paint_shape(painter: &Painter, shape: Shape, r: Rect, z: f32, fill: Color
 }
 
 /// The full look of a shape item from its style, faded by `fade` (opacity).
-fn look_of(o: &Object, p: &Pal, z: f32, fade: impl Fn(Color32) -> Color32) -> (shapes::Look, Color32) {
+fn look_of(o: &Object, ink: board::Ink, p: &Pal, z: f32, fade: impl Fn(Color32) -> Color32) -> (shapes::Look, Color32) {
     let s = &o.style;
-    let ink = fade(s.ink.color(p));
+    let ink = fade(ink.color(p));
     let (fill, label) = if !s.fill {
         (shapes::Fill::None, fade(p.text))
     } else {

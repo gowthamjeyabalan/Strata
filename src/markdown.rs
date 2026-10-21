@@ -42,6 +42,9 @@ pub enum Block {
     Code(String),
     Rule,
     Table(Vec<Vec<Vec<Span>>>),
+    /// `![alt](source)` on a line of its own: a picture. The source is a file path, or `image:<id>`
+    /// for a picture kept in the board.
+    Image { alt: String, src: String },
 }
 
 /// Bold, italic, strikethrough, code and links inside a line.
@@ -156,6 +159,15 @@ pub fn parse(text: &str) -> Vec<Block> {
             i += 1;
             continue;
         }
+        // A picture on a line of its own.
+        if let Some(rest) = t.strip_prefix("![") {
+            if let Some((alt, src)) = rest.split_once("](").filter(|(_, s)| s.ends_with(')')) {
+                end_para(&mut para, &mut out);
+                out.push(Block::Image { alt: alt.to_owned(), src: src[..src.len() - 1].trim().to_owned() });
+                i += 1;
+                continue;
+            }
+        }
         if t.starts_with("```") {
             end_para(&mut para, &mut out);
             let mut code = Vec::new();
@@ -269,7 +281,11 @@ pub enum Target {
 
 /// Paint `blocks` from `top_left`, `width` wide, at `scale` (1 in panels, the zoom on the board).
 /// Returns the height used and the clickable places.
-pub fn paint(painter: &Painter, blocks: &[Block], top_left: Pos2, width: f32, scale: f32, p: &Pal, ink: Color32) -> (f32, Vec<(Rect, Target)>) {
+/// A picture's texture and size in pixels, for `Block::Image`.
+pub type Pictures<'a> = &'a dyn Fn(&str) -> Option<(egui::TextureId, egui::Vec2)>;
+
+#[allow(clippy::too_many_arguments)]
+pub fn paint(painter: &Painter, blocks: &[Block], top_left: Pos2, width: f32, scale: f32, p: &Pal, ink: Color32, pictures: Pictures) -> (f32, Vec<(Rect, Target)>) {
     let mut y = top_left.y;
     let x = top_left.x;
     let mut hits = Vec::new();
@@ -338,6 +354,20 @@ pub fn paint(painter: &Painter, blocks: &[Block], top_left: Pos2, width: f32, sc
                 painter.galley(pos2(x + 8.0 * scale, y + 6.0 * scale), g, ink);
                 y += r.height();
             }
+            Block::Image { alt, src } => match pictures(src) {
+                Some((tex, size)) => {
+                    // As wide as it is, or as the note; never stretched.
+                    let w = (size.x * scale).min(width).max(1.0);
+                    let h = w * size.y / size.x.max(1.0);
+                    let r = Rect::from_min_size(pos2(x, y), vec2(w, h));
+                    painter.image(tex, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    y += h;
+                }
+                None => {
+                    let label = if alt.is_empty() { format!("Picture not found: {src}") } else { format!("{alt} (picture not found)") };
+                    y += text(painter, &[Span { text: label, italic: true, ..Default::default() }], pos2(x, y), width, body, false, p.text_secondary, p, &mut hits, visible);
+                }
+            },
             Block::Rule => {
                 y += 4.0 * scale;
                 painter.line_segment([pos2(x, y), pos2(x + width, y)], Stroke::new(1.0, p.hairline));

@@ -21,8 +21,6 @@ pub enum Panel {
     Notes,
     Layers,
     Frames,
-    Graph,
-    Calendar,
 }
 
 /// Commands, run by the app (some need its dialogs, settings or panels).
@@ -37,6 +35,7 @@ pub enum Cmd {
     Undo,
     Redo,
     ZoomFit,
+    ZoomSelection,
     ActualSize,
     Overview,
     Snapping,
@@ -72,6 +71,7 @@ fn commands() -> Vec<(Cmd, String, &'static str)> {
         (Cmd::Undo, "Undo".into(), "back"),
         (Cmd::Redo, "Redo".into(), "forward"),
         (Cmd::ZoomFit, "Zoom to fit".into(), "view all whole board"),
+        (Cmd::ZoomSelection, "Zoom to the selection".into(), "view selected focus"),
         (Cmd::ActualSize, "Actual size".into(), "zoom 100"),
         (Cmd::Overview, "Show or hide the Overview".into(), "map minimap view"),
         (Cmd::Snapping, "Turn snapping on or off".into(), "align guides"),
@@ -96,7 +96,7 @@ fn commands() -> Vec<(Cmd, String, &'static str)> {
     for t in Tool::ALL {
         v.push((Cmd::Tool(t), format!("{} tool", t.name()), "tool draw"));
     }
-    for (p, name) in [(Panel::Properties, "Properties"), (Panel::Notes, "Notes"), (Panel::Layers, "Layers"), (Panel::Frames, "Frames"), (Panel::Graph, "Graph"), (Panel::Calendar, "Calendar")] {
+    for (p, name) in [(Panel::Properties, "Properties"), (Panel::Notes, "Notes"), (Panel::Layers, "Layers"), (Panel::Frames, "Frames")] {
         v.push((Cmd::Show(p), format!("Show {name}"), "panel"));
     }
     v

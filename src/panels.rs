@@ -124,7 +124,7 @@ fn new_object_props(ui: &mut Ui, ed: &mut Editor) {
         ed.style = s;
     }
     theme::heading(ui, "TEXT");
-    ui.add(egui::Slider::new(&mut ed.style.font_size, 8.0..=72.0).text("Size"));
+    ui.add(egui::Slider::new(&mut ed.style.font_size, 6.0..=400.0).logarithmic(true).max_decimals(0).text("Size"));
     theme::heading(ui, "FLOWCHART BOX");
     shape_combo(ui, "new-shape", &mut ed.node_shape, &Shape::FLOW);
     theme::heading(ui, "CONNECTIONS");
@@ -362,7 +362,7 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
                 x.label = label;
             }
         }
-        if let Kind::Image { image } = o.kind {
+        if let Kind::Image { image, .. } = o.kind {
             if let Some(a) = ed.board.images.get(&image) {
                 ui.label(theme::secondary(ui, format!("{} x {} pixels, shown at {:.0} x {:.0}", a.size[0], a.size[1], o.rect[2], o.rect[3])));
             }
@@ -462,11 +462,52 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
     if any_text {
         theme::heading(ui, "TEXT");
         let mut fs = o.style.font_size;
-        if ui.add(egui::Slider::new(&mut fs, 8.0..=72.0).text("Size")).changed() {
+        if ui.add(egui::Slider::new(&mut fs, 6.0..=400.0).logarithmic(true).max_decimals(0).text("Size")).changed() {
             apply_to_selection(ed,|s| s.font_size = fs);
         }
     }
 
+    if single && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. }) {
+        theme::heading(ui, "ROTATION");
+        ui.horizontal(|ui| {
+            let mut deg = o.rotation.to_degrees();
+            if ui.add(egui::DragValue::new(&mut deg).range(-180.0..=180.0).speed(1.0).suffix("°")).changed() {
+                ed.mark_changed();
+                if let Some(x) = ed.board.get_mut(first) {
+                    x.rotation = deg.to_radians();
+                }
+            }
+            if ui.add_enabled(o.rotation != 0.0, egui::Button::new("Reset")).clicked() {
+                ed.mark_changed();
+                if let Some(x) = ed.board.get_mut(first) {
+                    x.rotation = 0.0;
+                }
+            }
+        });
+        ui.label(theme::secondary(ui, "Or drag the round handle above the item; Shift keeps 15° steps."));
+    }
+    if let (true, Kind::Image { crop, .. }) = (single, &o.kind) {
+        theme::heading(ui, "CROP");
+        ui.horizontal(|ui| {
+            let cropping = ed.cropping == Some(first);
+            if ui.add_enabled(!cropping, egui::Button::new("Crop")).on_hover_text("Or double-click the image").clicked() {
+                ed.start_crop(first);
+            }
+            if cropping && ui.button("Done").clicked() {
+                ed.cropping = None;
+            }
+            if ui.add_enabled(crop.is_some(), egui::Button::new("Reset crop")).on_hover_text("Show the whole picture again").clicked() {
+                ed.mark_changed();
+                if let Some(x) = ed.board.get_mut(first) {
+                    let full = x.image_full_rect();
+                    x.set_rect(full);
+                    if let Kind::Image { crop, .. } = &mut x.kind {
+                        *crop = None;
+                    }
+                }
+            }
+        });
+    }
     theme::heading(ui, "VISIBILITY");
     let mut opacity = o.opacity * 100.0;
     if ui.add(egui::Slider::new(&mut opacity, 5.0..=100.0).suffix("%").text("Opacity")).changed() {
@@ -559,6 +600,13 @@ fn wire_props(ui: &mut Ui, ed: &mut Editor, wid: Id) {
         ed.mark_changed();
         if let Some(x) = ed.board.wire_mut(wid) {
             x.label = label;
+        }
+    }
+    theme::heading(ui, "COLOUR");
+    if let Some(ink) = ink_row(ui, w.color.unwrap_or(Ink::Auto)) {
+        ed.mark_changed();
+        if let Some(x) = ed.board.wire_mut(wid) {
+            x.color = if ink == Ink::Auto { None } else { Some(ink) };
         }
     }
     theme::heading(ui, "LINE");
@@ -657,9 +705,50 @@ enum LayerAction {
     Down(usize),
     MoveHere(Id),
     Delete(Id),
+    Toggle(Id),
+    Hide(Id),
+    Lock(Id),
+    Color(Id, Option<Ink>),
+    SelectAll(Id),
+    /// Items dropped on a layer.
+    Drop(Id, Id),
+    GoTo(Id),
+}
+
+/// An item being dragged from one layer's list to another layer.
+#[derive(Clone, Copy)]
+struct LayerItem(Id);
+
+/// A small line icon in the layer rows: an eye (shown) or a padlock.
+fn layer_icon(ui: &mut Ui, kind: &str, on: bool, tip: &str) -> bool {
+    let p = pal(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(20.0, 22.0), Sense::click());
+    let c = if resp.hovered() { p.accent } else if on { p.text } else { p.text_secondary.gamma_multiply(0.6) };
+    let m = r.center();
+    let st = Stroke::new(1.3, c);
+    match kind {
+        "eye" => {
+            let pts = |s: f32| (0..=12).map(move |k| { let t = k as f32 / 12.0; m + vec2(-6.5 + 13.0 * t, s * 4.0 * (t * std::f32::consts::PI).sin()) }).collect::<Vec<_>>();
+            ui.painter().add(egui::Shape::line(pts(-1.0), st));
+            ui.painter().add(egui::Shape::line(pts(1.0), st));
+            ui.painter().circle_filled(m, 1.8, c);
+            if !on {
+                ui.painter().line_segment([m + vec2(-6.0, 5.0), m + vec2(6.0, -5.0)], st);
+            }
+        }
+        _ => {
+            let body = Rect::from_center_size(m + vec2(0.0, 2.5), vec2(10.0, 7.0));
+            ui.painter().rect_stroke(body, 1.5, st, egui::StrokeKind::Middle);
+            let lift = if on { 0.0 } else { -2.5 };
+            ui.painter().add(egui::Shape::line((0..=10).map(|k| { let a = std::f32::consts::PI * (1.0 + k as f32 / 10.0); m + vec2(3.0 * a.cos(), -1.0 + lift + 3.5 * a.sin()) }).collect(), st));
+        }
+    }
+    resp.on_hover_text(tip).clicked()
 }
 
 /// Layers the user makes. The top of the list is in front; new items go on the highlighted layer.
+/// Each layer can be opened to list its items, hidden, locked, given a colour, and right-clicked for
+/// more; items can be dragged from one layer's list onto another layer.
 pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
     let p = pal(ui.ctx());
     let rename_id = ui.id().with("layer-rename");
@@ -669,25 +758,48 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
         if ui.button("New layer").on_hover_text("Adds a layer above the current one").clicked() {
             renaming = Some(ed.add_layer());
         }
+        if !ed.selection.is_empty() {
+            ui.label(theme::secondary(ui, "Drag items, or right-click a layer"));
+        }
     });
-    ui.label(theme::secondary(ui, "Top is in front. New items go on the highlighted layer. Double-click a name to rename it."));
+    ui.label(theme::secondary(ui, "Top is in front; new items go on the highlighted layer. Items without a colour of their own take their layer's colour."));
     ui.add_space(4.0);
     let layers = ed.board.layers.clone();
     let n = layers.len();
     let has_sel = !ed.selection.is_empty();
+    // Items inside groups are listed with their group, not on their own.
+    let inner: std::collections::HashSet<Id> = ed.board.objects.iter().filter_map(|o| if let Kind::Group { members, .. } = &o.kind { Some(members.clone()) } else { None }).flatten().collect();
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (i, l) in layers.iter().enumerate().rev() {
             let active = l.id == ed.active_layer;
+            let open = ed.layers_open.contains(&l.id);
             let count = ed.board.objects.iter().filter(|o| o.layer == l.id && !o.is_group()).count();
-            ui.horizontal(|ui| {
+            let row = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                let small = |ui: &mut Ui, text: &str, enabled: bool, tip: &str| ui.add_enabled(enabled, egui::Button::new(RichText::new(text).size(11.0)).frame(false).min_size(vec2(18.0, 22.0))).on_hover_text(tip).clicked();
-                if small(ui, "▲", i + 1 < n, "Move the layer up (in front)") {
-                    action = Some(LayerAction::Up(i));
+                // Open or close the list of its items.
+                let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, 22.0), Sense::click());
+                let m = ar.center();
+                let pts = if open { vec![m + vec2(-4.0, -2.0), m + vec2(0.0, 2.0), m + vec2(4.0, -2.0)] } else { vec![m + vec2(-2.0, -4.0), m + vec2(2.0, 0.0), m + vec2(-2.0, 4.0)] };
+                ui.painter().add(egui::Shape::line(pts, Stroke::new(1.5, if aresp.hovered() { p.accent } else { p.text_secondary })));
+                if aresp.on_hover_text(if open { "Hide its items" } else { "List its items" }).clicked() {
+                    action = Some(LayerAction::Toggle(l.id));
                 }
-                if small(ui, "▼", i > 0, "Move the layer down (behind)") {
-                    action = Some(LayerAction::Down(i));
+                if layer_icon(ui, "eye", !l.hidden, if l.hidden { "Show the layer" } else { "Hide the layer" }) {
+                    action = Some(LayerAction::Hide(l.id));
                 }
+                if layer_icon(ui, "lock", l.locked, if l.locked { "Unlock the layer" } else { "Lock the layer" }) {
+                    action = Some(LayerAction::Lock(l.id));
+                }
+                // The layer's colour, picked from a small menu.
+                let dot = l.color.map(|c| c.color(p)).unwrap_or(Color32::TRANSPARENT);
+                let (dr, dresp) = ui.allocate_exact_size(vec2(18.0, 22.0), Sense::click());
+                ui.painter().circle(dr.center(), 5.5, dot, Stroke::new(1.0, if dresp.hovered() { p.accent } else { p.hairline }));
+                egui::Popup::menu(&dresp.on_hover_text("The layer's colour")).show(|ui| {
+                    ui.label(theme::secondary(ui, "Colour for its items that have none of their own"));
+                    if let Some(ink) = ink_row(ui, l.color.unwrap_or(Ink::Auto)) {
+                        action = Some(LayerAction::Color(l.id, if ink == Ink::Auto { None } else { Some(ink) }));
+                    }
+                });
                 match &mut renaming {
                     Some((rid, text)) if *rid == l.id => {
                         let r = ui.add(egui::TextEdit::singleline(text).desired_width((ui.available_width() - 4.0).max(40.0)));
@@ -699,35 +811,96 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
                             }
                             renaming = None;
                         }
+                        None
                     }
                     _ => {
-                        let right = if has_sel { 40.0 } else { 0.0 } + if n > 1 { 22.0 } else { 0.0 } + 28.0;
-                        let w = (ui.available_width() - right).max(40.0);
+                        let w = (ui.available_width() - 30.0).max(40.0);
                         let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
-                        let bg = if active { p.accent.gamma_multiply(0.22) } else if resp.hovered() { p.bg_control_hover } else { Color32::TRANSPARENT };
+                        let dropping = resp.dnd_hover_payload::<LayerItem>().is_some();
+                        let bg = if dropping { p.accent.gamma_multiply(0.3) } else if active { p.accent.gamma_multiply(0.22) } else if resp.hovered() { p.bg_control_hover } else { Color32::TRANSPARENT };
                         ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
                         if active {
                             ui.painter().rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 5.0), vec2(3.0, rect.height() - 10.0)), CornerRadius::same(2), p.accent);
                         }
-                        let font = egui::FontId::proportional(13.0);
-                        let color = if active { p.text } else { p.text_secondary };
-                        ui.painter().text(pos2(rect.left() + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, short_label(&l.name), font, color);
-                        let resp = resp.on_hover_text(if active { "New items go on this layer" } else { "Click to put new items on this layer" });
+                        let color = if l.hidden { p.text_secondary.gamma_multiply(0.6) } else if active { p.text } else { p.text_secondary };
+                        ui.painter().text(pos2(rect.left() + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, short_label(&l.name), egui::FontId::proportional(13.0), color);
+                        ui.add_sized([26.0, 22.0], egui::Label::new(RichText::new(count.to_string()).size(11.0).color(p.text_secondary))).on_hover_text(plural(count, "item", "items"));
+                        if let Some(item) = resp.dnd_release_payload::<LayerItem>() {
+                            action = Some(LayerAction::Drop(item.0, l.id));
+                        }
+                        let resp = resp.on_hover_text(if active { "New items go on this layer. Right-click for more." } else { "Click to put new items on this layer. Right-click for more." });
                         if resp.double_clicked() {
                             renaming = Some((l.id, l.name.clone()));
                         } else if resp.clicked() {
                             action = Some(LayerAction::Activate(l.id));
                         }
-                        ui.add_sized([28.0, 22.0], egui::Label::new(RichText::new(count.to_string()).size(11.0).color(p.text_secondary))).on_hover_text(plural(count, "item", "items"));
-                        if has_sel && ui.add(egui::Button::new(RichText::new("Move").size(11.0)).min_size(vec2(36.0, 20.0))).on_hover_text("Move the selected items to this layer").clicked() {
-                            action = Some(LayerAction::MoveHere(l.id));
-                        }
-                        if n > 1 && small(ui, "×", true, if count == 0 { "Delete the layer" } else { "Delete the layer and the items on it" }) {
-                            action = Some(LayerAction::Delete(l.id));
-                        }
+                        Some(resp)
                     }
                 }
             });
+            // Right-click: everything a layer can do.
+            if let Some(resp) = row.inner {
+                resp.context_menu(|ui| {
+                    if ui.button("Select its items").clicked() {
+                        action = Some(LayerAction::SelectAll(l.id));
+                    }
+                    if ui.add_enabled(!active, egui::Button::new("Make it the current layer")).clicked() {
+                        action = Some(LayerAction::Activate(l.id));
+                    }
+                    if ui.add_enabled(has_sel, egui::Button::new("Move the selection here")).clicked() {
+                        action = Some(LayerAction::MoveHere(l.id));
+                    }
+                    ui.separator();
+                    if ui.button(if l.hidden { "Show" } else { "Hide" }).clicked() {
+                        action = Some(LayerAction::Hide(l.id));
+                    }
+                    if ui.button(if l.locked { "Unlock" } else { "Lock" }).clicked() {
+                        action = Some(LayerAction::Lock(l.id));
+                    }
+                    ui.menu_button("Colour", |ui| {
+                        if let Some(ink) = ink_row(ui, l.color.unwrap_or(Ink::Auto)) {
+                            action = Some(LayerAction::Color(l.id, if ink == Ink::Auto { None } else { Some(ink) }));
+                        }
+                    });
+                    ui.separator();
+                    if ui.button("Rename").clicked() {
+                        renaming = Some((l.id, l.name.clone()));
+                    }
+                    if ui.add_enabled(i + 1 < n, egui::Button::new("Move up (in front)")).clicked() {
+                        action = Some(LayerAction::Up(i));
+                    }
+                    if ui.add_enabled(i > 0, egui::Button::new("Move down (behind)")).clicked() {
+                        action = Some(LayerAction::Down(i));
+                    }
+                    ui.separator();
+                    let label = if count == 0 { "Delete the layer" } else { "Delete the layer and its items" };
+                    if ui.add_enabled(n > 1, egui::Button::new(RichText::new(label).color(p.danger))).clicked() {
+                        action = Some(LayerAction::Delete(l.id));
+                    }
+                });
+            }
+            // Its items, when open: click one to go to it, drag one onto another layer.
+            if open {
+                let items: Vec<(Id, String, &'static str)> = ed.board.objects.iter().rev().filter(|o| o.layer == l.id && o.page == ed.page && !inner.contains(&o.id)).take(300).map(|o| (o.id, ed.board.name_of(o), o.kind.name())).collect();
+                if items.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(38.0);
+                        ui.label(theme::secondary(ui, "Nothing on this page"));
+                    });
+                }
+                for (id, name, kind) in items {
+                    ui.horizontal(|ui| {
+                        ui.add_space(38.0);
+                        let sel = ed.selection.contains(&id);
+                        let text = RichText::new(format!("{}   {}", short_label(&name), kind)).size(12.0).color(if sel { p.text } else { p.text_secondary });
+                        let resp = ui.add(egui::Button::selectable(sel, text).min_size(vec2(ui.available_width(), 20.0)).sense(Sense::click_and_drag()));
+                        resp.dnd_set_drag_payload(LayerItem(id));
+                        if resp.on_hover_text("Click to go to it; drag it onto another layer to move it there").clicked() {
+                            action = Some(LayerAction::GoTo(id));
+                        }
+                    });
+                }
+            }
         }
     });
     ui.data_mut(|d| match &renaming {
@@ -737,14 +910,57 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
         None => d.remove::<(Id, String)>(rename_id),
     });
     let Some(action) = action else { return };
+    let layer_name = |ed: &Editor, id: Id| ed.board.layers.iter().find(|l| l.id == id).map(|l| l.name.clone()).unwrap_or_default();
     match action {
         LayerAction::Activate(id) => ed.active_layer = id,
+        LayerAction::Toggle(id) => {
+            if !ed.layers_open.remove(&id) {
+                ed.layers_open.insert(id);
+            }
+        }
         LayerAction::Rename(id, name) => {
             ed.mark_changed();
             if let Some(l) = ed.board.layers.iter_mut().find(|l| l.id == id) {
                 l.name = name;
             }
         }
+        LayerAction::Hide(id) | LayerAction::Lock(id) => {
+            ed.mark_changed();
+            let hide = matches!(action, LayerAction::Hide(_));
+            if let Some(l) = ed.board.layers.iter_mut().find(|l| l.id == id) {
+                if hide {
+                    l.hidden = !l.hidden;
+                } else {
+                    l.locked = !l.locked;
+                }
+            }
+        }
+        LayerAction::Color(id, c) => {
+            ed.mark_changed();
+            if let Some(l) = ed.board.layers.iter_mut().find(|l| l.id == id) {
+                l.color = c;
+            }
+        }
+        LayerAction::SelectAll(id) => {
+            // Its items on this page, as whole groups and sketches (what a click on them would pick).
+            let page = ed.page;
+            let mut sel: Vec<Id> = ed.board.objects.iter().filter(|o| o.layer == id && o.page == page && !ed.board.veil.contains(&o.id)).map(|o| ed.board.outer_sketch(o.id)).filter(|x| !inner.contains(x) || ed.board.get(*x).is_some_and(|o| o.is_sketch())).collect();
+            sel.dedup();
+            sel.retain(|x| !inner.contains(x));
+            ed.finish_edit();
+            let count = sel.len();
+            ed.selection = sel;
+            ed.selected_wire = None;
+            ed.say(format!("Selected {} on {}", plural(count, "item", "items"), layer_name(ed, id)));
+        }
+        LayerAction::Drop(item, id) => {
+            // Dragging a selected item moves the whole selection.
+            let ids = if ed.selection.contains(&item) { ed.selection.clone() } else { vec![item] };
+            ed.mark_changed();
+            ed.board.set_layer(&ids, id);
+            ed.say(format!("Moved {} to {}", plural(ids.len(), "item", "items"), layer_name(ed, id)));
+        }
+        LayerAction::GoTo(item) => ed.go_to(item),
         LayerAction::Up(i) => {
             ed.mark_changed();
             ed.board.layers.swap(i, i + 1);
@@ -757,7 +973,7 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
             ed.mark_changed();
             let sel = ed.selection.clone();
             ed.board.set_layer(&sel, id);
-            ed.say(format!("Moved {} to {}", plural(sel.len(), "item", "items"), ed.board.layers.iter().find(|l| l.id == id).map(|l| l.name.clone()).unwrap_or_default()));
+            ed.say(format!("Moved {} to {}", plural(sel.len(), "item", "items"), layer_name(ed, id)));
         }
         LayerAction::Delete(id) => {
             ed.mark_changed();
@@ -774,89 +990,6 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
 fn short_label(s: &str) -> String {
     let line = s.lines().next().unwrap_or_default();
     if line.chars().count() > 28 { format!("{}…", line.chars().take(27).collect::<String>()) } else { line.to_owned() }
-}
-
-/// True if following wires can lead back to where it started.
-fn has_cycle(b: &board::Board) -> bool {
-    use std::collections::HashMap;
-    let mut indeg: HashMap<Id, usize> = b.objects.iter().map(|o| (o.id, 0)).collect();
-    for w in &b.wires {
-        *indeg.entry(w.to).or_default() += 1;
-    }
-    let mut queue: Vec<Id> = indeg.iter().filter(|(_, d)| **d == 0).map(|(id, _)| *id).collect();
-    let mut seen = 0;
-    while let Some(id) = queue.pop() {
-        seen += 1;
-        for w in b.wires.iter().filter(|w| w.from == id) {
-            let d = indeg.get_mut(&w.to).unwrap();
-            *d -= 1;
-            if *d == 0 {
-                queue.push(w.to);
-            }
-        }
-    }
-    seen < indeg.len()
-}
-
-pub fn graph_ui(ui: &mut Ui, ed: &mut Editor) {
-    let b = &ed.board;
-    let n = b.objects.len();
-    let m = b.wires.len();
-    ui.label(theme::secondary(ui, format!("{}, {}", plural(n, "object", "objects"), plural(m, "connection", "connections"))));
-    if m > 0 {
-        let sources = b.objects.iter().filter(|o| b.inputs(o.id).next().is_none() && b.outputs(o.id).next().is_some()).count();
-        let cyc = if has_cycle(b) { "has a loop" } else { "no loops" };
-        ui.label(theme::secondary(ui, format!("{}, {cyc}", plural(sources, "start point", "start points"))));
-    }
-    let mut select: Option<Id> = None;
-    let mut select_wire: Option<Id> = None;
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        if ed.selection.len() == 1 {
-            let id = ed.selection[0];
-            theme::heading(ui, "INCOMING");
-            let ins: Vec<Id> = b.inputs(id).collect();
-            if ins.is_empty() {
-                ui.label(theme::secondary(ui, "None. Drag from another item's port to this one."));
-            }
-            for i in ins {
-                if ui.link(b.display_name(i)).clicked() {
-                    select = Some(i);
-                }
-            }
-            theme::heading(ui, "OUTGOING");
-            let outs: Vec<Id> = b.outputs(id).collect();
-            if outs.is_empty() {
-                ui.label(theme::secondary(ui, "None"));
-            }
-            for o in outs {
-                if ui.link(b.display_name(o)).clicked() {
-                    select = Some(o);
-                }
-            }
-        }
-        theme::heading(ui, "ALL CONNECTIONS");
-        if m == 0 {
-            ui.label(theme::secondary(ui, "No connections yet. Drag from any port, or use the Connect tool (C)."));
-        }
-        for w in &b.wires {
-            let mut text = format!("{}  →  {}", short_label(&b.display_name(w.from)), short_label(&b.display_name(w.to)));
-            if !w.label.is_empty() {
-                text.push_str(&format!("  ({})", short_label(&w.label)));
-            }
-            let sel = ed.selected_wire == Some(w.id);
-            if ui.add_sized([ui.available_width(), 22.0], egui::Button::selectable(sel, text).frame_when_inactive(false)).clicked() {
-                select_wire = Some(w.id);
-            }
-        }
-    });
-    if let Some(id) = select {
-        ed.selection = vec![id];
-        ed.selected_wire = None;
-    }
-    if let Some(w) = select_wire {
-        ed.selection.clear();
-        ed.selected_wire = Some(w);
-    }
 }
 
 /// A note's text without markdown marks, for a short preview: everything after its title line.
@@ -1111,6 +1244,22 @@ pub fn note_view(ui: &mut Ui, ed: &mut Editor, nid: Id) {
             if ui.button("Delete").on_hover_text(if cards == 0 { "Delete the note" } else { "Delete the note and its cards" }).clicked() {
                 ed.delete_notes(&[nid]);
             }
+            if ui.button("Insert image…").on_hover_text("Put a picture in the note (it is kept in the board)").clicked() {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff"]).pick_file() {
+                    match ed.embed_note_picture(&path) {
+                        Some(line) => {
+                            if let Some(n) = ed.board.note_mut(nid) {
+                                if !n.text.ends_with('\n') {
+                                    n.text.push('\n');
+                                }
+                                n.text.push_str(&line);
+                                n.text.push('\n');
+                            }
+                        }
+                        None => ed.say("That file is not a picture Overlay can read"),
+                    }
+                }
+            }
             let place = if cards == 0 { "Place on board" } else { "Place another card" };
             if ui.button(place).on_hover_text("A card showing this note, in the middle of the view").clicked() {
                 let at = ed.paste_point();
@@ -1309,7 +1458,8 @@ fn note_reader(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32, p: &crate::the
         let width = (width - 8.0).max(40.0);
         let top = ui.cursor().min + vec2(0.0, 4.0);
         // Slightly larger type than on cards, for reading.
-        let (h, hits) = crate::markdown::paint(ui.painter(), &blocks, top, width, 1.1, p, p.text);
+        let ctx = ui.ctx().clone();
+        let (h, hits) = crate::markdown::paint(ui.painter(), &blocks, top, width, 1.1, p, p.text, &|src| ed.note_picture(&ctx, src));
         let resp = ui.allocate_rect(egui::Rect::from_min_size(top, vec2(width, h.max(20.0) + 12.0)), Sense::click());
         if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.clicked()) {
             clicked = hits.into_iter().find(|(r, _)| r.contains(pos)).map(|(_, t)| t);

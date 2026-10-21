@@ -72,18 +72,6 @@ pub fn on_days(o: &Object, days: &[String]) -> bool {
     o.days.iter().any(|d| days.contains(d))
 }
 
-/// What the Calendar's chosen days do to the board.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum DayMode {
-    /// Nothing: the board shows everything as usual.
-    #[default]
-    All,
-    /// Items from the chosen days are marked; the rest are faded.
-    Highlight,
-    /// Only items from the chosen days are on the board.
-    Only,
-}
-
 /// Items from `days`, with the groups around them and everything inside groups among them (a group
 /// from that day shows with its contents; an item shows inside its group). Also returns the items
 /// that were themselves made or changed on those days.

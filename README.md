@@ -14,7 +14,7 @@
 
 **Overlay** is a fast, lightweight whiteboard for Windows. Drop in images, sketch with a pen, marker or highlighter, and build flowcharts. Every item on the board is a node with ports on all four sides, so an image, a scribble, a text box or a whole group can be connected to anything else. Connections show relationships; they do not carry data.
 
-<p align="center"><img alt="Overlay with two frames on the Plan page: a flowchart with yes and no branches and a sketch, and two linked note cards with a sticky note, a curve and a polygon. The Notes list with folders is on the left, the page buttons and the week Calendar are below the board, and Properties is on the right." src="docs/screenshot.png" width="900"></p>
+<p align="center"><img alt="Overlay with two frames on the Plan page: a flowchart with yes and no branches and a sketch, and two linked note cards with a sticky note, a curve and a polygon. The Notes list with folders is on the left, the page buttons and the date roller are below the board, and Properties is on the right." src="docs/screenshot.png" width="900"></p>
 
 ## Download
 
@@ -31,24 +31,29 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 
 **Connect everything**
 - Every item has a port in the middle of each side. Drag from a port to another item to connect them.
-- Curved, straight or right-angle (elbow) connections, with labels such as "yes" or "no".
+- Curved, straight or right-angle (elbow) connections, with labels such as "yes" or "no", in any colour.
+- Ctrl+drag an item to drag a copy of it; the copy is connected to the original where you drop it.
 - Press `/` to add an item from a searchable list. With a node selected, the new item appears beside it, already connected and ready to type in, so a flowchart can be built from the keyboard alone.
 - Drag a connection into empty space and the same list opens there.
 
 **Organise**
 - Named, coloured groups that move together, have their own ports, nest, and collapse into a single node.
 - Sketches: group strokes alone and they join into one item with no frame, which moves, resizes and connects as one.
-- Layers you make yourself: name them, reorder them to choose what is in front, and move items between them.
+- Layers you make yourself: name them, reorder them to choose what is in front, open them to list their items and drag items between them, hide or lock them, and give them a colour that their items without a colour of their own take. Right-click a layer for everything else, such as selecting its items.
 - Snapping to other items' edges, centres and equal gaps while you move or resize, with guide lines. Hold Alt to skip it.
 - Lock items, change opacity, and add comment threads to any item.
+- Rotate any item by the round handle above it (Shift keeps 15° steps), and crop images (double-click one).
+- Drag left to right to select what is wholly inside the box, or right to left to select whatever it touches.
+- While drawing a box, the arrow keys split it into a grid: right and left for columns, up and down for rows.
 - A radial menu: hold the right mouse button on an item, or hold it still on empty board, and move to an action, then let go. Add opens sections (Draw, Shapes, Flowchart, Note, Image) that each open a further ring of tools or items, Tools has select, pan and connect, Width and Colour set the line for the selection and for what you draw next, View has zoom to fit, the Overview and snapping, and Layer and Arrange open a second ring to pick from; Delete, Duplicate, Lock, Group and Properties act straight away. This is where the tools live; there is no toolbar.
-- A Graph panel listing connections, and a floating Overview map of the whole board.
+- A floating Overview map of the whole board, and zoom to the selection (Shift+2).
 
 **Notes**
 - A Notes list on the left shows every note as a card with a preview, in folders you make. Double-click a note to open it in its own tab beside the board, to write, read, or both side by side.
 - Markdown notes: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
 - Place a note on the board as a card: it can be resized, scrolls inside itself, and connects, groups and layers like any item. The same note can have several cards.
 - Pasting markdown or dropping `.md` files onto the window makes notes.
+- Pictures in notes: `![name](path)` on a line of its own, or Insert image… in a note's tab to keep the picture in the board.
 - Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names; a link to a note that does not exist yet shows paler, and following it (a click when reading, Ctrl+click when writing) makes that note and opens it. Dotted lines join the cards of linked notes on the board (View > Links between note cards).
 
 **Pages, frames and presenting**
@@ -59,10 +64,9 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 **Search everything**
 - Ctrl+K finds notes, text, comments and connection labels on every page, and frames, layers and pages, and runs any command or tool by name.
 
-**Calendar**
+**Dates**
 - Every item records when it was made and each day it was changed, automatically.
-- The Calendar panel shows a week as day cards, each listing that day's items, with a bar showing how much was done.
-- Choose days to highlight their items on the board, or show only those items.
+- A row of dates under the board shows how much was done each day. Click a date (Ctrl-click for more) to highlight that day's items on the board.
 
 **Style**
 - Style presets, solid or gradient fills, solid, dashed or dotted lines, rounded corners, and sketch, glass and shadow effects.
@@ -94,7 +98,7 @@ These are the defaults; every tool and most commands can be given other keys in 
 | Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste (images and text too) |
 | Ctrl+[, Ctrl+] | Send to back, bring to front |
 | Arrow keys | Nudge (Shift for 10) |
-| Ctrl+0, Shift+1 | Actual size, zoom to fit |
+| Ctrl+0, Shift+1, Shift+2 | Actual size, zoom to fit, zoom to the selection |
 | M | Show or hide the Overview |
 | Ctrl+E | Export an image |
 | Ctrl+K | Search everything, run a command |
@@ -109,7 +113,9 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 
 | Topic | How |
 |---|---|
-| Resize | Drag any of the eight handles around a selected item. Corner handles keep an image's shape (Shift frees it). |
+| Resize | Drag any of the eight handles around a selected item (text boxes too: their height follows the text). Corner handles keep an image's shape (Shift frees it). |
+| Rotate | Drag the round handle above a selected item; Shift keeps 15° steps. Properties > Rotation sets an exact angle. |
+| Crop | Double-click an image (or Properties > Crop), drag its handles, then press Enter or click elsewhere. Reset crop shows the whole picture again. |
 | Corner radius | Drag the small diamond inside a selected shape's top-left corner, or use Rounded and Corner in Properties. |
 | Labels | Double-click an item, or select it and press Enter. Images and sketches get a caption. Double-click empty board for new text. |
 | Connections | Drag from a port to another item's port, or anywhere on it (the facing side is used). The Connect tool connects from anywhere on an item. Double-click a connection to label it. |
@@ -124,8 +130,10 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Settings | File > Settings…, Ctrl+, or Ctrl+K "Settings". Sections for appearance (mode, interface size), the board, drawing, notes, the radial menu, undo, files, and keyboard shortcuts. In Keyboard shortcuts, click a shortcut and press the new keys; a shortcut belongs to one action, so giving it to another moves it. Esc, Delete, Enter, the arrows, copy and paste, and Space stay fixed. |
 | Pages | Click a page button under the board to show it, double-click to rename it, + adds one, and the × beside the current page deletes it with what is on it (Ctrl+Z brings it back). Each page keeps its own view. |
 | Frames | Frames sit behind everything and are picked by their edge or name. Double-click the name to rename it. In the Frames panel, click a frame to go to it, use the arrows to change the slide order, and ▶ to present from it. |
-| Calendar | Click a day to choose it, Ctrl-click to add days. Highlight fades the other items; Only these days hides them. Click an item in a day to select it and bring it into view. |
-| Panels | Notes, Calendar, Properties, Layers, Frames and Graph are dockable tabs. View > Reset panel layout restores the default. |
+| Dates | Click a date in the row under the board to highlight what was made or changed that day (Ctrl-click for more days, click again or Clear to stop). |
+| Panels | Notes, Properties, Layers and Frames are dockable tabs. The Window menu turns them on and off, saves the arrangement as a named workspace to come back to, and restores the default layout. |
+| Start view | Shows when Overlay opens (unless a board was opened from Explorer): new board, open, the demo, and recent boards. Settings > Files turns it off, and the last board then opens straight away. |
+| Colours | In the radial menu, Colour opens rings for red, green and blue: move around a ring to set it and let go to use the colour. The outer ring has the ready colours and the ones mixed before. |
 
 </details>
 
@@ -155,11 +163,11 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/snap.rs` | Snapping to edges, centres and equal gaps |
 | `src/insert.rs` | The `/` list |
 | `src/export.rs` | PNG and JPG export (a small software renderer) |
-| `src/panels.rs`, `src/overview.rs` | Notes, Properties, Layers, Frames, Graph and the Overview |
+| `src/panels.rs`, `src/overview.rs` | Notes, Properties, Layers, Frames and the Overview |
 | `src/radial.rs` | The radial menu: tools, new items and actions on the selection |
 | `src/markdown.rs` | Reading and drawing notes' markdown |
 | `src/search.rs` | Search everything (Ctrl+K) |
-| `src/dates.rs`, `src/calendar.rs` | Dates on items and the Calendar |
+| `src/dates.rs`, `src/calendar.rs` | Dates on items and the date roller |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 
 The look follows the **Grapht** design system: a quiet grey interface with one blue accent, Inter type, and round strokes. Its tokens and notes are in [`design/`](design). The logo is an "O" left open and closed by a blue dot; the brand kit and its generator are in [`brand/`](brand).

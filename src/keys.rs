@@ -27,6 +27,7 @@ pub enum Action {
     BringFront,
     SendBack,
     ZoomFit,
+    ZoomSelection,
     ActualSize,
     Overview,
     Present,
@@ -55,6 +56,7 @@ impl Action {
             Action::BringFront => "Bring to front".into(),
             Action::SendBack => "Send to back".into(),
             Action::ZoomFit => "Zoom to fit".into(),
+            Action::ZoomSelection => "Zoom to the selection".into(),
             Action::ActualSize => "Actual size".into(),
             Action::Overview => "Show or hide the Overview".into(),
             Action::Present => "Present frames".into(),
@@ -112,7 +114,7 @@ pub fn sections() -> Vec<(&'static str, Vec<Action>)> {
         ("File", vec![Action::NewBoard, Action::Open, Action::Save, Action::SaveAs, Action::Export, Action::Settings]),
         ("Edit", vec![Action::Undo, Action::Redo, Action::SelectAll, Action::Duplicate, Action::Lock, Action::Group, Action::Ungroup, Action::BringFront, Action::SendBack]),
         ("Add", vec![Action::AddItem, Action::InsertImage]),
-        ("View", vec![Action::Search, Action::ZoomFit, Action::ActualSize, Action::Overview, Action::Present]),
+        ("View", vec![Action::Search, Action::ZoomFit, Action::ZoomSelection, Action::ActualSize, Action::Overview, Action::Present]),
     ]
 }
 
@@ -143,6 +145,7 @@ pub fn default_combo(a: Action) -> Option<Combo> {
         Action::BringFront => c(CloseBracket),
         Action::SendBack => c(OpenBracket),
         Action::ZoomFit => Some(Combo::new(Num1, false, true)),
+        Action::ZoomSelection => Some(Combo::new(Num2, false, true)),
         Action::ActualSize => c(Num0),
         Action::Overview => plain(M),
         Action::Present => plain(F5),

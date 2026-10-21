@@ -55,10 +55,14 @@ struct Settings {
     ui_scale: Option<f32>,
     reopen_last: Option<bool>,
     keys: Option<crate::keys::Keymap>,
+    start_view: Option<bool>,
+    custom_colors: Option<Vec<[u8; 3]>>,
+    recent: Option<Vec<PathBuf>>,
+    workspaces: Option<Vec<(String, DockState<Tab>)>>,
 }
 
 const SETTINGS_KEY: &str = "overlay-settings";
-const DOCK_VERSION: u32 = 8;
+const DOCK_VERSION: u32 = 9;
 
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Board]);
@@ -67,8 +71,7 @@ fn default_dock() -> DockState<Tab> {
     // the other panels are on the right.
     // Notes are listed on the left, like files in a notebook app; opened notes are tabs beside the board.
     let [board, _notes] = s.split_left(NodeIndex::root(), 0.17, vec![Tab::Notes]);
-    let [board, _panels] = s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Frames, Tab::Graph]);
-    s.split_below(board, 0.74, vec![Tab::Calendar]);
+    s.split_right(board, 0.78, vec![Tab::Properties, Tab::Layers, Tab::Frames]);
     d
 }
 
@@ -102,8 +105,17 @@ pub struct App {
     settings_win: crate::settings::SettingsWindow,
     /// Interface size (egui's zoom factor).
     ui_scale: f32,
-    /// Open the last board when the app starts.
-    reopen_last: bool,
+    /// Show the start view when the app opens (otherwise reopen the last board).
+    start_view: bool,
+    /// The start view is showing.
+    start_open: bool,
+    /// Boards opened or saved lately, newest first.
+    recent: Vec<PathBuf>,
+    /// Panel arrangements saved from the Window menu.
+    workspaces: Vec<(String, DockState<Tab>)>,
+    /// The name being typed for a new workspace.
+    ws_name: String,
+    logo: Option<egui::TextureHandle>,
     /// Frame timing, only when OVERLAY_PERF names a file to write it to.
     perf: Option<Perf>,
 }
@@ -185,12 +197,16 @@ impl App {
         ed.history.set_limit(ed.undo_steps);
         ed.note_mode = settings.note_mode.unwrap_or(1).min(2);
         ed.keys = settings.keys.clone().unwrap_or_default();
+        ed.custom_colors = settings.custom_colors.clone().unwrap_or_default();
         let ui_scale = settings.ui_scale.unwrap_or(1.0).clamp(0.75, 1.5);
         cc.egui_ctx.set_zoom_factor(ui_scale);
-        let reopen_last = settings.reopen_last.unwrap_or(true);
-        // A file given on the command line wins over the last one used.
+        let start_view = settings.start_view.unwrap_or(true);
+        // A file given on the command line (opened from Explorer) goes straight to the board.
+        // Otherwise the start view shows, or with it switched off, the last board opens.
         let arg = std::env::args().nth(1).map(PathBuf::from);
-        let reopened = arg.or(settings.last_file.filter(|_| reopen_last)).filter(|p| p.exists()).map(|p| ed.load(&p).is_ok()).unwrap_or(false);
+        let from_explorer = arg.is_some();
+        let reopened = arg.or(settings.last_file.filter(|_| !start_view)).filter(|p| p.exists()).map(|p| ed.load(&p).is_ok()).unwrap_or(false);
+        let start_open = start_view && !from_explorer;
         if !reopened {
             ed.fit_pending = true;
         }
@@ -207,7 +223,12 @@ impl App {
             was_presenting: false,
             settings_win: Default::default(),
             ui_scale,
-            reopen_last,
+            start_view,
+            start_open,
+            recent: settings.recent.clone().unwrap_or_default(),
+            workspaces: settings.workspaces.clone().unwrap_or_default(),
+            ws_name: String::new(),
+            logo: None,
             perf: Perf::from_env(),
         }
     }
@@ -343,6 +364,8 @@ impl App {
         }
         // A polyline being drawn takes Enter, Esc and Backspace.
         ed.poly_keys(&ctx);
+        // Cropping takes Enter and Esc.
+        ed.crop_keys(&ctx);
 
         let (events, mods) = ctx.input(|i| (i.events.clone(), i.modifiers));
         let mut pasted = false;
@@ -385,7 +408,8 @@ impl App {
             }
             let step = if i.modifiers.shift { 10.0 } else { 1.0 };
             for (k, d) in [(Key::ArrowLeft, vec2(-step, 0.0)), (Key::ArrowRight, vec2(step, 0.0)), (Key::ArrowUp, vec2(0.0, -step)), (Key::ArrowDown, vec2(0.0, step))] {
-                if i.key_pressed(k) {
+                // While a box is being drawn, the arrows make a grid of it instead.
+                if i.key_pressed(k) && !ed.drawing_box() {
                     ed.nudge(d);
                 }
             }
@@ -413,9 +437,6 @@ impl App {
                 ui.separator();
                 if ui.button("Insert image…").clicked() {
                     self.ed.pick_images();
-                }
-                if ui.button("Settings…").clicked() {
-                    self.settings_win.open = true;
                 }
                 if ui.button("Export image…").clicked() {
                     self.export.open = true;
@@ -460,6 +481,9 @@ impl App {
                 if ui.button("Zoom to fit").clicked() {
                     self.ed.zoom_to_fit();
                 }
+                if ui.add_enabled(!self.ed.selection.is_empty() || self.ed.selected_wire.is_some(), egui::Button::new("Zoom to the selection")).clicked() {
+                    self.ed.zoom_to_selection();
+                }
                 if ui.button("Actual size").clicked() {
                     self.ed.reset_zoom();
                 }
@@ -467,22 +491,14 @@ impl App {
                 ui.switch(&mut self.ed.show_overview, "Overview (M)");
                 ui.switch(&mut self.ed.show_note_links, "Links between note cards").on_hover_text("Dotted lines join the cards of notes that link to each other with [[Name]].");
                 ui.switch(&mut self.ed.snapping, "Snap to items").on_hover_text("Lines items up with each other's edges, centres and gaps while you move or resize them. Hold Alt to skip it for one drag.");
-                ui.separator();
-                if ui.button("Reset panel layout").clicked() {
-                    self.dock = default_dock();
-                }
             });
+            ui.menu_button("Window", |ui| self.window_menu(ui));
+            // Settings has its own place in the bar.
+            if ui.button("Settings").clicked() {
+                self.settings_win.open = true;
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(4.0);
-                ui.scope(|ui| {
-                    ui.set_width(190.0);
-                    let mut a = self.appearance;
-                    if ui.segmented(&mut a, &[(Appearance::System, "System"), (Appearance::Dark, "Dark"), (Appearance::Light, "Light")]) {
-                        self.appearance = a;
-                        theme::set_appearance(ui.ctx(), a);
-                    }
-                });
                 ui.add_space(8.0);
                 let z = self.ed.camera.zoom * 100.0;
                 let zoom = if z < 1.0 { format!("{z:.2}%") } else if z < 10.0 { format!("{z:.1}%") } else { format!("{z:.0}%") };
@@ -500,6 +516,158 @@ impl App {
                 ui.label(egui::RichText::new(info).color(p.text_secondary));
             });
         });
+    }
+
+    /// Panels on and off, and saved arrangements of them.
+    fn window_menu(&mut self, ui: &mut Ui) {
+        ui.label(theme::secondary(ui, "Panels"));
+        for (tab, name) in [(Tab::Notes, "Notes"), (Tab::Properties, "Properties"), (Tab::Layers, "Layers"), (Tab::Frames, "Frames")] {
+            let mut on = self.dock.find_tab(&tab).is_some();
+            if ui.checkbox(&mut on, name).clicked() {
+                self.toggle_tab(tab);
+            }
+        }
+        ui.checkbox(&mut self.ed.show_overview, "Overview (M)");
+        ui.separator();
+        ui.label(theme::secondary(ui, "Workspaces"));
+        let mut load = None;
+        let mut remove = None;
+        for (k, (name, _)) in self.workspaces.iter().enumerate() {
+            ui.horizontal(|ui| {
+                if ui.button(name).on_hover_text("Arrange the panels this way").clicked() {
+                    load = Some(k);
+                }
+                if ui.add(egui::Button::new("×").frame(false)).on_hover_text("Forget this workspace").clicked() {
+                    remove = Some(k);
+                }
+            });
+        }
+        if let Some(k) = load {
+            self.dock = self.workspaces[k].1.clone();
+            ui.close();
+        }
+        if let Some(k) = remove {
+            self.workspaces.remove(k);
+        }
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.ws_name).hint_text("Name").desired_width(120.0));
+            if ui.button("Save current").on_hover_text("Keep the panels as they are now, under this name").clicked() {
+                let name = if self.ws_name.trim().is_empty() { format!("Workspace {}", self.workspaces.len() + 1) } else { self.ws_name.trim().to_owned() };
+                // Note tabs belong to a board, so they are not kept in a workspace.
+                let mut dock = self.dock.clone();
+                dock.retain_tabs(|t| !matches!(t, Tab::Note(_)));
+                self.workspaces.retain(|(n, _)| *n != name);
+                self.workspaces.push((name.clone(), dock));
+                self.ws_name.clear();
+                self.ed.say(format!("Saved the workspace \"{name}\""));
+            }
+        });
+        ui.separator();
+        if ui.button("Default layout").clicked() {
+            self.dock = default_dock();
+            ui.close();
+        }
+    }
+
+    /// Show a panel, or hide it if it is showing. A shown panel goes beside its usual neighbours.
+    fn toggle_tab(&mut self, tab: Tab) {
+        if let Some(path) = self.dock.find_tab(&tab) {
+            self.dock.remove_tab(path);
+            return;
+        }
+        let neighbour = match tab {
+            Tab::Notes => None,
+            _ => [Tab::Properties, Tab::Layers, Tab::Frames].iter().find_map(|t| self.dock.find_tab(t)),
+        };
+        if let Some(path) = neighbour {
+            if let Ok(leaf) = self.dock.leaf_mut(path.node_path()) {
+                leaf.append_tab(tab);
+                let last = leaf.tabs.len() - 1;
+                let _ = leaf.set_active_tab(last);
+            }
+            return;
+        }
+        match self.dock.find_tab(&Tab::Board) {
+            Some(path) if path.surface == egui_dock::SurfaceIndex::main() => {
+                let s = self.dock.main_surface_mut();
+                if tab == Tab::Notes {
+                    s.split_left(path.node, 0.17, vec![tab]);
+                } else {
+                    s.split_right(path.node, 0.8, vec![tab]);
+                }
+            }
+            _ => self.dock.push_to_focused_leaf(tab),
+        }
+    }
+
+    /// The start view, as in Grapht: the name, ways in, and the boards used lately.
+    fn start_view(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let p = pal(&ctx);
+        let logo = self
+            .logo
+            .get_or_insert_with(|| {
+                let img = image::load_from_memory(include_bytes!("../brand/png/overlay-icon-blue-256.png")).map(|i| i.to_rgba8()).unwrap_or_default();
+                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                ctx.load_texture("start-logo", ci, egui::TextureOptions::LINEAR)
+            })
+            .id();
+        let rect = ui.max_rect();
+        let w = 440.0f32.min(rect.width() - 40.0);
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_center_size(rect.center() - vec2(0.0, 30.0), vec2(w, rect.height().min(640.0)))).layout(egui::Layout::top_down(egui::Align::Center)));
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        ui.add(egui::Image::new((logo, vec2(72.0, 72.0))));
+        ui.label(egui::RichText::new("Overlay").family(theme::display_family()).size(34.0).color(p.text));
+        ui.label(egui::RichText::new("A whiteboard where every image, sketch, shape and note is a node.").size(14.0).color(p.text_secondary));
+        ui.add_space(14.0);
+        let big = |t: &str| egui::Button::new(egui::RichText::new(t).size(14.0)).min_size(vec2(w, 36.0));
+        let mut close = false;
+        let last = self.recent.iter().find(|p| p.exists()).cloned();
+        if let Some(path) = &last {
+            let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            if ui.add(big(&format!("Continue with {name}"))).on_hover_text(path.display().to_string()).clicked() {
+                if let Err(e) = self.ed.load(path) {
+                    self.ed.say(format!("Could not open {}: {e}", path.display()));
+                } else {
+                    close = true;
+                }
+            }
+        }
+        if ui.add(big("New board")).clicked() {
+            self.ed.new_board();
+            close = true;
+        }
+        if ui.add(big("Open…")).clicked() {
+            self.ed.open_dialog();
+            close = self.ed.path.is_some();
+        }
+        if ui.add(big("Open the demo board")).on_hover_text("A sample board with pages, frames, notes and a flowchart").clicked() {
+            self.ed.load_demo();
+            close = true;
+        }
+        let others: Vec<PathBuf> = self.recent.iter().filter(|p| p.exists() && Some(*p) != last.as_ref()).take(7).cloned().collect();
+        if !others.is_empty() {
+            ui.add_space(16.0);
+            ui.label(egui::RichText::new("Recent boards").size(12.5).color(p.text_secondary));
+            for path in others {
+                let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let folder = path.parent().map(|f| f.display().to_string()).unwrap_or_default();
+                let text = egui::RichText::new(format!("{name}    {folder}")).size(13.0).color(p.text);
+                if ui.add(egui::Button::new(text).frame(false).truncate().min_size(vec2(w, 24.0))).on_hover_text(path.display().to_string()).clicked() {
+                    if let Err(e) = self.ed.load(&path) {
+                        self.ed.say(format!("Could not open {}: {e}", path.display()));
+                    } else {
+                        close = true;
+                    }
+                }
+            }
+        }
+        ui.add_space(16.0);
+        ui.label(egui::RichText::new("You can also drop a board or images on this window.").size(12.0).color(p.text_secondary));
+        if close {
+            self.start_open = false;
+        }
     }
 
     fn update_title(&mut self, ui: &Ui) {
@@ -551,13 +719,17 @@ impl TabViewer for Viewer<'_> {
             Tab::Tools | Tab::Draw | Tab::Shapes | Tab::Flowchart => {
                 ui.label(theme::secondary(ui, "Tools are in the radial menu: hold the right mouse button on the board. View > Reset panel layout removes this tab."));
             }
-            Tab::Calendar => crate::calendar::calendar_ui(ui, self.ed),
+            Tab::Calendar => {
+                ui.label(theme::secondary(ui, "The calendar is now the row of dates under the board. View > Reset panel layout removes this tab."));
+            }
             Tab::Notes => panels::notes_ui(ui, self.ed),
             Tab::Frames => panels::frames_ui(ui, self.ed),
             Tab::Note(id) => panels::note_view(ui, self.ed, *id),
             Tab::Properties => panels::properties_ui(ui, self.ed),
             Tab::Layers => panels::layers_ui(ui, self.ed),
-            Tab::Graph => panels::graph_ui(ui, self.ed),
+            Tab::Graph => {
+                ui.label(theme::secondary(ui, "The Graph panel was removed. View > Reset panel layout removes this tab."));
+            }
             Tab::History => {
                 ui.label(theme::secondary(ui, "History was removed; Ctrl+Z and Ctrl+Y still undo and redo. View > Reset panel layout removes this tab."));
             }
@@ -662,6 +834,23 @@ impl App {
         }
 
         self.update_title(ui);
+        if let Some(path) = self.ed.path.clone() {
+            if self.recent.first() != Some(&path) {
+                self.recent.retain(|r| *r != path);
+                self.recent.insert(0, path);
+                self.recent.truncate(10);
+            }
+            // A board opened by dropping it on the start view closes the start view.
+            self.start_open = false;
+        }
+        if self.start_open {
+            let p = pal(&ctx);
+            egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| self.start_view(ui));
+            crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view });
+            self.save_dialog(&ctx);
+            return;
+        }
 
         let p = pal(&ctx);
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
@@ -718,7 +907,7 @@ impl App {
         overview::show(&ctx, &mut self.ed);
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);
-        crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, reopen_last: &mut self.reopen_last });
+        crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view });
         if (ctx.zoom_factor() - self.ui_scale).abs() > 1e-3 {
             ctx.set_zoom_factor(self.ui_scale);
         }
@@ -761,6 +950,7 @@ impl App {
             Action::Ungroup => Cmd::Ungroup,
             Action::InsertImage => Cmd::InsertImage,
             Action::ZoomFit => Cmd::ZoomFit,
+            Action::ZoomSelection => Cmd::ZoomSelection,
             Action::ActualSize => Cmd::ActualSize,
             Action::Overview => Cmd::Overview,
             Action::Present => Cmd::Present,
@@ -798,6 +988,7 @@ impl App {
             Cmd::Undo => ed.undo(),
             Cmd::Redo => ed.redo(),
             Cmd::ZoomFit => ed.zoom_to_fit(),
+            Cmd::ZoomSelection => ed.zoom_to_selection(),
             Cmd::ActualSize => ed.reset_zoom(),
             Cmd::Overview => ed.show_overview = !ed.show_overview,
             Cmd::Snapping => ed.snapping = !ed.snapping,
@@ -844,8 +1035,6 @@ impl App {
                     Panel::Notes => Tab::Notes,
                     Panel::Layers => Tab::Layers,
                     Panel::Frames => Tab::Frames,
-                    Panel::Graph => Tab::Graph,
-                    Panel::Calendar => Tab::Calendar,
                 };
                 if let Some(path) = self.dock.find_tab(&tab) {
                     let _ = self.dock.set_active_tab(path);
@@ -874,7 +1063,11 @@ impl App {
             undo_steps: Some(self.ed.undo_steps),
             note_mode: Some(self.ed.note_mode),
             ui_scale: Some(self.ui_scale),
-            reopen_last: Some(self.reopen_last),
+            reopen_last: None,
+            start_view: Some(self.start_view),
+            custom_colors: Some(self.ed.custom_colors.clone()),
+            recent: Some(self.recent.clone()),
+            workspaces: Some(self.workspaces.clone()),
             keys: Some(self.ed.keys.clone()),
         };
         eframe::set_value(storage, SETTINGS_KEY, &s);

@@ -1,157 +1,73 @@
-//! The Calendar: a week of days, each listing the items made or changed that day, with a bar that
-//! shows how much was done. Chosen days can mark or filter the board.
+//! The date roller under the board: one row of days, each with a bar for how much was made or
+//! changed that day. Clicking days highlights their items on the board.
 
-use crate::board::Id;
-use crate::dates::{DayMode, day_of};
 use crate::editor::{Editor, plural};
-use crate::theme::{self, UiExt, pal};
 use chrono::{Datelike, Duration, Local, NaiveDate};
-use egui::{Align2, CornerRadius, FontId, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, CornerRadius, FontId, Rect, ScrollArea, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use std::collections::HashMap;
 
-/// Monday of the week `offset` weeks from this one.
-fn week_start(offset: i64) -> NaiveDate {
-    let today = Local::now().date_naive();
-    today - Duration::days(today.weekday().num_days_from_monday() as i64) + Duration::weeks(offset)
-}
+/// Height of the roller.
+pub const ROLLER: f32 = 46.0;
+const CHIP: f32 = 38.0;
 
-/// One item on one day.
-struct Entry<'a> {
-    /// Where it is in the board's list.
-    index: usize,
-    /// Made that day (rather than changed).
-    new: bool,
-    /// When it was made, for sorting.
-    created: &'a str,
-}
-
-pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
-    let p = pal(ui.ctx());
-    let start = week_start(ed.cal_week);
-    let days: Vec<NaiveDate> = (0..7).map(|i| start + Duration::days(i)).collect();
-    let keys: Vec<String> = days.iter().map(|d| d.format("%Y-%m-%d").to_string()).collect();
+pub fn date_roller(ui: &mut Ui, ed: &mut Editor, rect: Rect) {
+    let p = crate::theme::pal(ui.ctx());
+    ui.painter().rect_filled(rect, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, p.bg);
     let today = Local::now().date_naive();
 
-    // ── header: the week, then what the chosen days do ──
-    ui.horizontal(|ui| {
-        if ui.button("‹").on_hover_text("Previous week").clicked() {
-            ed.cal_week -= 1;
+    // How much happened each day, and from which day there is anything at all.
+    let inner = ed.board.sketch_inner();
+    let mut count: HashMap<&str, usize> = HashMap::new();
+    for o in ed.board.objects.iter().filter(|o| !inner.contains(&o.id)) {
+        for d in &o.days {
+            *count.entry(d.as_str()).or_default() += 1;
         }
-        if ui.add_enabled(ed.cal_week != 0, egui::Button::new("This week")).clicked() {
-            ed.cal_week = 0;
+    }
+    let first = count.keys().filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).min().unwrap_or(today);
+    let start = (first - Duration::days(3)).max(today - Duration::days(400)).min(today - Duration::days(21));
+    let end = today + Duration::days(3);
+    let most = count.values().copied().max().unwrap_or(1).max(1);
+
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let ui = &mut child;
+    let mut toggle: Option<(String, bool)> = None;
+    if !ed.cal_days.is_empty() {
+        if ui.add(egui::Button::new(egui::RichText::new("Clear").size(11.5)).frame(false)).on_hover_text("Stop highlighting days").clicked() {
+            ed.cal_days.clear();
         }
-        if ui.button("›").on_hover_text("Next week").clicked() {
-            ed.cal_week += 1;
-        }
-        let end = days[6];
-        let range = if start.month() == end.month() {
-            format!("{} – {}", start.format("%-d"), end.format("%-d %b %Y"))
-        } else {
-            format!("{} – {}", start.format("%-d %b"), end.format("%-d %b %Y"))
-        };
-        ui.label(theme::semibold(range).size(13.0));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.allocate_ui(vec2(300.0, 26.0), |ui| {
-                let mut mode = ed.day_mode;
-                if ui.segmented(&mut mode, &[(DayMode::All, "Show all"), (DayMode::Highlight, "Highlight"), (DayMode::Only, "Only these days")]) {
-                    ed.day_mode = mode;
+    }
+    // The newest days are on the right, and the roller starts scrolled to them.
+    ScrollArea::horizontal().id_salt("date-roller").stick_to_right(true).auto_shrink([false, true]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
+        ui.horizontal(|ui| {
+            let mut day = start;
+            while day <= end {
+                let key = day.format("%Y-%m-%d").to_string();
+                let n = count.get(key.as_str()).copied().unwrap_or(0);
+                let chosen = ed.cal_days.contains(&key);
+                let (r, resp) = ui.allocate_exact_size(vec2(CHIP, ROLLER - 10.0), Sense::click());
+                let painter = ui.painter();
+                let fill = if chosen { p.accent.gamma_multiply(0.22) } else if resp.hovered() { p.bg_control_hover } else { p.inner_card_fill };
+                let stroke = if chosen { Stroke::new(1.5, p.accent) } else if day == today { Stroke::new(1.0, p.accent.gamma_multiply(0.7)) } else { Stroke::new(1.0, p.inner_card_stroke) };
+                painter.rect(r, CornerRadius::same(7), fill, stroke, StrokeKind::Inside);
+                // The month on its first day, the weekday otherwise.
+                let top = if day.day() == 1 { day.format("%b").to_string() } else { day.format("%a").to_string().chars().take(2).collect() };
+                let dim = if n == 0 { p.text_secondary } else { p.text };
+                painter.text(pos2(r.center().x, r.top() + 4.0), Align2::CENTER_TOP, top, FontId::proportional(9.5), if day == today { p.accent } else { p.text_secondary });
+                painter.text(pos2(r.center().x, r.top() + 15.0), Align2::CENTER_TOP, day.day().to_string(), FontId::new(12.5, crate::theme::semibold_family()), dim);
+                // The bar: that day's share of the busiest day.
+                if n > 0 {
+                    let w = (r.width() - 12.0) * (n as f32 / most as f32).max(0.15);
+                    painter.rect_filled(Rect::from_min_size(pos2(r.center().x - w * 0.5, r.bottom() - 6.0), vec2(w, 3.0)), CornerRadius::same(2), p.accent);
                 }
-            });
+                let tip = format!("{}: {}", day.format("%a %-d %b %Y"), if n == 0 { "nothing made or changed".to_owned() } else { format!("{} made or changed", plural(n, "item", "items")) });
+                if resp.on_hover_text(tip).clicked() {
+                    toggle = Some((key, ui.input(|i| i.modifiers.command || i.modifiers.shift)));
+                }
+                day += Duration::days(1);
+            }
         });
     });
-    let hint = if ed.cal_days.is_empty() {
-        "Click a day to choose it, Ctrl-click to add more. Then highlight its items on the board or show only them.".to_owned()
-    } else {
-        let mut chosen: Vec<String> = ed.cal_days.iter().filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).map(|d| d.format("%a %-d %b").to_string()).collect();
-        chosen.truncate(4);
-        format!("Chosen: {}{}. Click a chosen day again to clear it.", chosen.join(", "), if ed.cal_days.len() > 4 { "…" } else { "" })
-    };
-    ui.label(theme::secondary(ui, hint));
-    ui.add_space(4.0);
-
-    // ── each day's items ──
-    let inner = ed.board.sketch_inner();
-    let first = keys[0].as_str();
-    let last = keys[6].as_str();
-    let mut buckets: Vec<Vec<Entry>> = (0..7).map(|_| Vec::new()).collect();
-    for (index, o) in ed.board.objects.iter().enumerate().filter(|(_, o)| !inner.contains(&o.id)) {
-        // Days are kept sorted, so only the ones inside this week are looked at.
-        for d in o.days.iter().filter(|d| d.as_str() >= first && d.as_str() <= last) {
-            if let Some(k) = keys.iter().position(|k| k == d) {
-                buckets[k].push(Entry { index, new: day_of(&o.created) == d, created: &o.created });
-            }
-        }
-    }
-    for b in &mut buckets {
-        b.sort_by(|a, b| a.created.cmp(&b.created));
-    }
-    let most = buckets.iter().map(|b| b.len()).max().unwrap_or(0).max(1);
-
-    let gap = 6.0;
-    let area = ui.available_rect_before_wrap();
-    let col_w = ((area.width() - gap * 6.0) / 7.0).max(60.0);
-    let mut pick: Option<Id> = None;
-    let mut toggle: Option<(String, bool)> = None;
-    for (k, day) in days.iter().enumerate() {
-        let rect = Rect::from_min_size(pos2(area.left() + k as f32 * (col_w + gap), area.top()), vec2(col_w, area.height().max(80.0)));
-        let key = &keys[k];
-        let chosen = ed.cal_days.contains(key);
-        let is_today = *day == today;
-        let count = buckets[k].len();
-
-        // The card, tinted when chosen and outlined in blue for today.
-        let fill = if chosen { p.accent.gamma_multiply(0.16) } else { p.inner_card_fill };
-        let stroke = if chosen || is_today { Stroke::new(if chosen { 1.5 } else { 1.0 }, p.accent) } else { Stroke::new(1.0, p.inner_card_stroke) };
-        ui.painter().rect(rect, CornerRadius::same(10), fill, stroke, StrokeKind::Inside);
-
-        // Header: day, date, count and the highlighter bar. Clicking it chooses the day.
-        let head = Rect::from_min_size(rect.min, vec2(rect.width(), 52.0));
-        let resp = ui.interact(head, ui.id().with(("cal-day", key)), Sense::click());
-        if resp.hovered() && !chosen {
-            ui.painter().rect_filled(head.shrink(1.0), CornerRadius { nw: 9, ne: 9, sw: 0, se: 0 }, p.bg_control_hover);
-        }
-        if resp.clicked() {
-            toggle = Some((key.clone(), ui.input(|i| i.modifiers.command || i.modifiers.shift)));
-        }
-        let painter = ui.painter();
-        let number = if count == 0 { p.text_secondary } else { p.text };
-        painter.text(head.min + vec2(10.0, 8.0), Align2::LEFT_TOP, day.format("%a").to_string().to_uppercase(), FontId::proportional(10.5), if is_today { p.accent } else { p.text_secondary });
-        painter.text(head.min + vec2(10.0, 21.0), Align2::LEFT_TOP, day.format("%-d").to_string(), FontId::new(17.0, theme::semibold_family()), number);
-        if count > 0 {
-            painter.text(pos2(head.right() - 10.0, head.top() + 23.0), Align2::RIGHT_TOP, count.to_string(), FontId::proportional(11.0), p.text_secondary);
-        }
-        // The highlighter: a bar as long as that day's share of the week's busiest day.
-        let track = Rect::from_min_size(pos2(head.left() + 10.0, head.bottom() - 8.0), vec2(head.width() - 20.0, 4.0));
-        painter.rect_filled(track, CornerRadius::same(2), p.hairline.gamma_multiply(0.6));
-        if count > 0 {
-            let w = track.width() * count as f32 / most as f32;
-            painter.rect_filled(Rect::from_min_size(track.min, vec2(w.max(4.0), track.height())), CornerRadius::same(2), p.accent);
-        }
-        resp.on_hover_text(if count == 0 { "Nothing on this day".to_owned() } else { format!("{} made or changed", plural(count, "item", "items")) });
-
-        // The items, oldest first. Clicking one selects it and brings it into view.
-        let list = Rect::from_min_max(pos2(rect.left() + 4.0, head.bottom() + 4.0), rect.max - vec2(4.0, 6.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).id_salt(("cal-list", key)));
-        // Only the rows in view are laid out, however busy the day was.
-        child.spacing_mut().item_spacing = vec2(0.0, 2.0);
-        ScrollArea::vertical().id_salt(("cal-scroll", key)).auto_shrink([false, false]).show_rows(&mut child, 20.0, buckets[k].len(), |ui, rows| {
-            for e in &buckets[k][rows] {
-                let o = &ed.board.objects[e.index];
-                let sel = ed.selection.contains(&o.id);
-                let text = RichText::new(ed.board.name_of(o)).size(12.0).color(if e.new { p.text } else { p.text_secondary });
-                let row = ui.add(egui::Button::selectable(sel, text).frame_when_inactive(false).min_size(vec2(ui.available_width(), 20.0)));
-                // A small dot marks items made that day; changed ones have none.
-                if e.new {
-                    ui.painter().circle_filled(pos2(row.rect.left() + 3.0, row.rect.center().y), 2.2, p.accent);
-                }
-                let tip = if e.new { format!("Made at {}", e.created.get(11..16).unwrap_or("")) } else { "Changed".to_owned() };
-                if row.on_hover_text(tip).clicked() {
-                    pick = Some(o.id);
-                }
-            }
-        });
-    }
-    ui.allocate_rect(area, Sense::hover());
-
     if let Some((key, add)) = toggle {
         if ed.cal_days.contains(&key) {
             ed.cal_days.retain(|d| *d != key);
@@ -160,12 +76,5 @@ pub fn calendar_ui(ui: &mut Ui, ed: &mut Editor) {
         } else {
             ed.cal_days = vec![key];
         }
-        // Choosing a day starts highlighting it, unless a way of showing it is already picked.
-        if !ed.cal_days.is_empty() && ed.day_mode == DayMode::All {
-            ed.day_mode = DayMode::Highlight;
-        }
-    }
-    if let Some(id) = pick {
-        ed.go_to(id);
     }
 }

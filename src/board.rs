@@ -16,7 +16,20 @@ pub type Id = u64;
 
 /// Space around a group's members, in world units. The top is taller to fit the name.
 pub const GROUP_PAD: f32 = 16.0;
+/// The band above the members of a group with the smallest name.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const GROUP_PAD_TOP: f32 = 36.0;
+
+/// The size of a group's name, in world units: larger for larger groups, so the name stays in
+/// proportion to what it names.
+pub fn group_font(width: f32) -> f32 {
+    (width / 16.0).clamp(15.0, 160.0)
+}
+
+/// The band above a group's members that holds its name (36 for the smallest name).
+pub fn group_pad_top(font: f32) -> f32 {
+    font * 1.6 + 12.0
+}
 
 /// A colour that is either fixed or follows the theme's text colour (so ink stays visible in both modes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -285,7 +298,12 @@ pub const MAX_WIDTH: f32 = 200.0;
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Kind {
-    Image { image: Id },
+    /// `crop` is the part of the picture shown (left, top, right, bottom, 0 to 1); none is all of it.
+    Image {
+        image: Id,
+        #[serde(default)]
+        crop: Option<[f32; 4]>,
+    },
     /// Freehand stroke or straight line. Points are local to the rect and were recorded at `base` size;
     /// they scale with the rect when it is resized.
     Path {
@@ -432,11 +450,14 @@ pub struct Object {
     /// The page it is on. 0 until it is placed on one.
     #[serde(default)]
     pub page: Id,
+    /// Turned about its centre, in radians (clockwise on screen).
+    #[serde(default)]
+    pub rotation: f32,
 }
 
 impl Object {
     pub fn new(id: Id, rect: Rect, kind: Kind, label: String, style: Style) -> Self {
-        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0, created: String::new(), days: Vec::new(), page: 0 };
+        let mut o = Object { id, rect: [0.0; 4], kind, label, style, locked: false, opacity: 1.0, comments: Vec::new(), layer: 0, created: String::new(), days: Vec::new(), page: 0, rotation: 0.0 };
         o.set_rect(rect);
         o
     }
@@ -453,12 +474,35 @@ impl Object {
     }
     pub fn port(&self, side: Side) -> Pos2 {
         let r = self.rect();
-        match side {
+        let at = match side {
             Side::Left => pos2(r.left(), r.center().y),
             Side::Right => pos2(r.right(), r.center().y),
             Side::Top => pos2(r.center().x, r.top()),
             Side::Bottom => pos2(r.center().x, r.bottom()),
+        };
+        rotate_about(at, r.center(), self.rotation)
+    }
+
+    /// The way out of a port, turned with the item.
+    pub fn port_normal(&self, side: Side) -> Vec2 {
+        rotate_about(pos2(0.0, 0.0) + side.normal(), pos2(0.0, 0.0), self.rotation).to_vec2()
+    }
+
+    /// The part of an image's picture that shows.
+    pub fn image_uv(&self) -> Rect {
+        match self.kind {
+            Kind::Image { crop: Some([l, t, r, b]), .. } => Rect::from_min_max(pos2(l, t), pos2(r, b)),
+            _ => Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
         }
+    }
+
+    /// The whole picture of a cropped image, in world space (its rect when not cropped).
+    pub fn image_full_rect(&self) -> Rect {
+        let r = self.rect();
+        let uv = self.image_uv();
+        let w = r.width() / uv.width().max(1e-4);
+        let h = r.height() / uv.height().max(1e-4);
+        Rect::from_min_size(pos2(r.min.x - uv.min.x * w, r.min.y - uv.min.y * h), vec2(w, h))
     }
     pub fn is_group(&self) -> bool {
         matches!(self.kind, Kind::Group { .. })
@@ -490,10 +534,13 @@ impl Object {
         let r = self.rect();
         let sx = if base[0] > 0.0 { r.width() / base[0] } else { 1.0 };
         let sy = if base[1] > 0.0 { r.height() / base[1] } else { 1.0 };
-        points.iter().map(|p| pos2(r.min.x + p[0] * sx, r.min.y + p[1] * sy)).collect()
+        let c = r.center();
+        points.iter().map(|p| rotate_about(pos2(r.min.x + p[0] * sx, r.min.y + p[1] * sy), c, self.rotation)).collect()
     }
     /// Does a world point hit this object? `tol` is in world units.
     pub fn hit(&self, p: Pos2, tol: f32) -> bool {
+        // A turned item is tested in its own frame (a path's points are already turned).
+        let p = if matches!(self.kind, Kind::Path { .. }) { p } else { rotate_about(p, self.rect().center(), -self.rotation) };
         match &self.kind {
             Kind::Path { closed, .. } => {
                 let pts = self.line_points();
@@ -553,6 +600,9 @@ pub struct Wire {
     pub label: String,
     #[serde(default)]
     pub style: WireStyle,
+    /// Its own colour; `None` is the theme's.
+    #[serde(default)]
+    pub color: Option<Ink>,
 }
 
 /// An image embedded in the board, stored as its original encoded bytes.
@@ -638,6 +688,15 @@ pub fn note_title(text: &str) -> String {
 pub struct Layer {
     pub id: Id,
     pub name: String,
+    /// Its items are off the board (and out of exports) while hidden.
+    #[serde(default)]
+    pub hidden: bool,
+    /// Its items cannot be moved, edited, erased or deleted while locked.
+    #[serde(default)]
+    pub locked: bool,
+    /// The colour of its items that have no colour of their own.
+    #[serde(default)]
+    pub color: Option<Ink>,
 }
 
 impl Board {
@@ -651,6 +710,18 @@ impl Board {
     pub fn get_mut(&mut self, id: Id) -> Option<&mut Object> {
         self.objects.iter_mut().find(|o| o.id == id)
     }
+    /// An item's colour: its own, or else its layer's, or else the theme's ink.
+    pub fn ink_of(&self, o: &Object) -> Ink {
+        if o.style.ink != Ink::Auto {
+            return o.style.ink;
+        }
+        self.layers.iter().find(|l| l.id == o.layer).and_then(|l| l.color).unwrap_or(Ink::Auto)
+    }
+
+    pub fn layer_of(&self, o: &Object) -> Option<&Layer> {
+        self.layers.iter().find(|l| l.id == o.layer)
+    }
+
     pub fn note(&self, id: Id) -> Option<&Note> {
         self.notes.iter().find(|n| n.id == id)
     }
@@ -722,7 +793,7 @@ impl Board {
     pub fn fix_layers(&mut self, active: &mut Id) {
         if self.layers.is_empty() {
             let id = self.new_id();
-            self.layers.push(Layer { id, name: "Layer 1".into() });
+            self.layers.push(Layer { id, name: "Layer 1".into(), hidden: false, locked: false, color: None });
         }
         if !self.layers.iter().any(|l| l.id == *active) {
             *active = self.layers[self.layers.len() - 1].id;
@@ -865,7 +936,7 @@ impl Board {
             for k in 0..self.objects.len() {
                 let Kind::Group { members, collapsed, sketch } = &self.objects[k].kind else { continue };
                 let Some(b) = members.iter().filter_map(|m| rects.get(m).copied()).reduce(|a, b| a.union(b)) else { continue };
-                let min = b.min - vec2(GROUP_PAD, GROUP_PAD_TOP);
+                let min = b.min - vec2(GROUP_PAD, group_pad_top(group_font(b.width() + GROUP_PAD * 2.0)));
                 // A collapsed group keeps its top-left corner and shrinks to a compact node. A sketch has
                 // no frame, so it fits its strokes exactly.
                 let r = if *sketch {
@@ -972,7 +1043,19 @@ impl Board {
 
     /// Drop images that no object uses any more.
     pub fn gc_images(&mut self) {
-        let used: Vec<Id> = self.objects.iter().filter_map(|o| if let Kind::Image { image } = o.kind { Some(image) } else { None }).collect();
+        let mut used: Vec<Id> = self.objects.iter().filter_map(|o| if let Kind::Image { image, .. } = o.kind { Some(image) } else { None }).collect();
+        // Pictures shown in notes (`image:<id>`) are kept too.
+        for n in &self.notes {
+            let mut rest = n.text.as_str();
+            while let Some(k) = rest.find("(image:") {
+                let after = &rest[k + 7..];
+                let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(id) = digits.parse() {
+                    used.push(id);
+                }
+                rest = after;
+            }
+        }
         self.images.retain(|id, _| used.contains(id));
     }
 
@@ -991,7 +1074,7 @@ impl Board {
             return None;
         }
         let id = self.new_id();
-        self.wires.push(Wire { id, from, from_side, to, to_side, label: String::new(), style });
+        self.wires.push(Wire { id, from, from_side, to, to_side, label: String::new(), style, color: None });
         Some(id)
     }
 
@@ -1006,15 +1089,9 @@ impl Board {
             return None;
         }
         let (a, b) = (self.get(pa)?, self.get(pb)?);
-        Some(route(a.port(w.from_side), w.from_side.normal(), b.port(w.to_side), Some(w.to_side.normal()), w.style))
+        Some(route(a.port(w.from_side), a.port_normal(w.from_side), b.port(w.to_side), Some(b.port_normal(w.to_side)), w.style))
     }
 
-    pub fn inputs(&self, id: Id) -> impl Iterator<Item = Id> + '_ {
-        self.wires.iter().filter(move |w| w.to == id).map(|w| w.from)
-    }
-    pub fn outputs(&self, id: Id) -> impl Iterator<Item = Id> + '_ {
-        self.wires.iter().filter(move |w| w.from == id).map(|w| w.to)
-    }
     /// Area covered by everything visible (items inside collapsed groups are left out).
     pub fn bounds(&self) -> Option<Rect> {
         let hidden = self.hidden_set();
@@ -1078,7 +1155,7 @@ impl Lookup {
             return None;
         }
         let (a, c) = (self.get(b, pa)?, self.get(b, pb)?);
-        Some(route(a.port(w.from_side), w.from_side.normal(), c.port(w.to_side), Some(w.to_side.normal()), w.style))
+        Some(route(a.port(w.from_side), a.port_normal(w.from_side), c.port(w.to_side), Some(c.port_normal(w.to_side)), w.style))
     }
 }
 
@@ -1172,6 +1249,16 @@ pub fn midpoint(pts: &[Pos2]) -> Pos2 {
         left -= l;
     }
     pts.first().copied().unwrap_or_default()
+}
+
+/// `p` turned by `angle` radians about `c`.
+pub fn rotate_about(p: Pos2, c: Pos2, angle: f32) -> Pos2 {
+    if angle == 0.0 {
+        return p;
+    }
+    let (s, co) = angle.sin_cos();
+    let d = p - c;
+    c + vec2(d.x * co - d.y * s, d.x * s + d.y * co)
 }
 
 /// A smooth curve through every point (Catmull-Rom), as a polyline.
@@ -1388,7 +1475,7 @@ mod tests {
         let mut b = Board::default();
         let img = b.new_id();
         b.images.insert(img, ImageAsset { bytes: Arc::new(vec![1, 2, 3]), size: [1, 1] });
-        b.add(Rect::from_min_size(Pos2::ZERO, vec2(1.0, 1.0)), Kind::Image { image: img }, Style::default());
+        b.add(Rect::from_min_size(Pos2::ZERO, vec2(1.0, 1.0)), Kind::Image { image: img, crop: None }, Style::default());
         let f = FileV1 { format: FILE_FORMAT.into(), version: 1, board: b, camera: Default::default() };
         let s = serde_json::to_string(&f).unwrap();
         let back: FileV1 = serde_json::from_str(&s).unwrap();

@@ -28,7 +28,8 @@ impl SettingsWindow {
 pub struct AppPrefs<'a> {
     pub appearance: &'a mut Appearance,
     pub ui_scale: &'a mut f32,
-    pub reopen_last: &'a mut bool,
+    /// Show the start view when Overlay opens (otherwise reopen the last board).
+    pub start_view: &'a mut bool,
 }
 
 /// One setting: its name and a line about it on the left, the control on the right.
@@ -235,7 +236,7 @@ fn drawing(ui: &mut Ui, ed: &mut Editor) {
     });
     row(ui, "Text size", "For new text and labels.", |ui| {
         ui.spacing_mut().slider_width = 170.0;
-        ui.add(egui::Slider::new(&mut ed.style.font_size, 8.0..=72.0).step_by(1.0));
+        ui.add(egui::Slider::new(&mut ed.style.font_size, 6.0..=400.0).logarithmic(true).max_decimals(0));
     });
     row(ui, "Polylines", "Straight segments, or a smooth curve through the points.", |ui| {
         ui.set_width(200.0);
@@ -276,8 +277,8 @@ fn undo(ui: &mut Ui, ed: &mut Editor) {
 
 fn files(ui: &mut Ui, app: &mut AppPrefs) {
     group(ui, "STARTING");
-    row(ui, "Reopen the last board", "Open the board you had open when Overlay starts.", |ui| {
-        ui.switch(app.reopen_last, "");
+    row(ui, "Start view", "When Overlay opens, show the start view with recent boards. When off, the last board opens straight away.", |ui| {
+        ui.switch(app.start_view, "");
     });
 }
 

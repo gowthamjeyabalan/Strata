@@ -95,6 +95,14 @@ pub struct Editor {
     pub note_query: String,
     /// Note tabs: 0 write, 1 split, 2 read.
     pub note_mode: u8,
+    /// Layers opened in the Layers panel to list their items.
+    pub layers_open: std::collections::HashSet<Id>,
+    /// The image being cropped.
+    pub cropping: Option<Id>,
+    /// Colours mixed on the radial menu's rings, newest first.
+    pub custom_colors: Vec<[u8; 3]>,
+    /// Pictures shown in notes, by source, loaded once (none if the source could not be read).
+    pub(crate) note_pictures: std::cell::RefCell<HashMap<String, Option<(egui::TextureHandle, egui::Vec2)>>>,
     /// Notes picked in the Notes list.
     pub notes_sel: Vec<Id>,
     /// The Notes list was clicked last (rather than the board), so Delete deletes notes.
@@ -111,12 +119,8 @@ pub struct Editor {
     pub(crate) note_view: std::cell::RefCell<HashMap<Id, (f32, Vec<(Rect, crate::markdown::Target)>)>>,
     /// A web link clicked in a note, to open.
     pub(crate) open_url: Option<String>,
-    /// Calendar: weeks before (negative) or after this one.
-    pub cal_week: i64,
     /// Calendar: the chosen days, `YYYY-MM-DD`.
     pub cal_days: Vec<String>,
-    /// What the chosen days do to the board.
-    pub day_mode: crate::dates::DayMode,
     /// While highlighting: everything shown at full strength, and the items from the chosen days.
     pub(crate) day_shown: std::collections::HashSet<Id>,
     pub(crate) day_direct: std::collections::HashSet<Id>,
@@ -190,6 +194,10 @@ impl Default for Editor {
             open_note: None,
             note_query: String::new(),
             note_mode: 1,
+            layers_open: Default::default(),
+            cropping: None,
+            custom_colors: Vec::new(),
+            note_pictures: Default::default(),
             notes_sel: Vec::new(),
             notes_focus: false,
             notes_folder: 0,
@@ -198,9 +206,7 @@ impl Default for Editor {
             note_scroll: HashMap::new(),
             note_view: Default::default(),
             open_url: None,
-            cal_week: 0,
             cal_days: Vec::new(),
-            day_mode: crate::dates::DayMode::All,
             day_shown: Default::default(),
             day_direct: Default::default(),
             editing: None,
@@ -270,6 +276,7 @@ impl Editor {
             undo_steps: self.undo_steps,
             note_mode: self.note_mode,
             keys: self.keys.clone(),
+            custom_colors: self.custom_colors.clone(),
             history: Undo::new(&Board::default(), self.undo_steps),
             ..Editor::default()
         }
@@ -296,7 +303,7 @@ impl Editor {
         let n = (1..).find(|n| !self.board.layers.iter().any(|l| l.name == format!("Layer {n}"))).unwrap_or(1);
         let at = self.board.layers.iter().position(|l| l.id == self.active_layer).map(|i| i + 1).unwrap_or(self.board.layers.len());
         self.mark_changed();
-        self.board.layers.insert(at, crate::board::Layer { id, name: format!("Layer {n}") });
+        self.board.layers.insert(at, crate::board::Layer { id, name: format!("Layer {n}"), hidden: false, locked: false, color: None });
         self.active_layer = id;
         (id, format!("Layer {n}"))
     }
@@ -387,6 +394,39 @@ impl Editor {
         }
     }
 
+    /// A picture for a note: `image:<id>` from the board's images, or a file path (relative ones
+    /// are found next to the board's file).
+    pub fn note_picture(&self, ctx: &egui::Context, src: &str) -> Option<(egui::TextureId, egui::Vec2)> {
+        let mut cache = self.note_pictures.borrow_mut();
+        let entry = cache.entry(src.to_owned()).or_insert_with(|| {
+            let bytes = if let Some(id) = src.strip_prefix("image:").and_then(|s| s.trim().parse::<Id>().ok()) {
+                self.board.images.get(&id).map(|a| a.bytes.to_vec())
+            } else {
+                let path = std::path::PathBuf::from(src.trim_start_matches("file:///"));
+                let path = if path.is_relative() { self.path.as_ref().and_then(|p| p.parent()).map(|d| d.join(&path)).unwrap_or(path) } else { path };
+                std::fs::read(path).ok()
+            }?;
+            let img = image::load_from_memory(&bytes).ok()?;
+            let img = if img.width().max(img.height()) > 2048 { img.resize(2048, 2048, image::imageops::FilterType::Triangle) } else { img };
+            let rgba = img.to_rgba8();
+            let size = egui::vec2(rgba.width() as f32, rgba.height() as f32);
+            let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+            Some((ctx.load_texture(format!("note-picture-{src}"), ci, egui::TextureOptions::LINEAR), size))
+        });
+        entry.as_ref().map(|(t, s)| (t.id(), *s))
+    }
+
+    /// Put a picture file into the board for a note; returns the text that shows it.
+    pub fn embed_note_picture(&mut self, path: &Path) -> Option<String> {
+        let bytes = std::fs::read(path).ok()?;
+        let img = image::load_from_memory(&bytes).ok()?;
+        let id = self.board.new_id();
+        self.board.images.insert(id, ImageAsset { bytes: Arc::new(bytes), size: [img.width(), img.height()] });
+        self.mark_changed();
+        let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        Some(format!("![{name}](image:{id})"))
+    }
+
     /// Is there a note or an item called `name` (what a `[[Name]]` link leads to)?
     pub fn link_known(&self, name: &str) -> bool {
         let key = name.trim().to_lowercase();
@@ -428,25 +468,20 @@ impl Editor {
         }
     }
 
-    /// Hide what should not show: items on other pages, and with the Calendar's chosen days, the
-    /// items from other days (hidden, or only faded while highlighting).
+    /// Hide the items on other pages, and with days chosen in the date roller, fade the items from
+    /// other days and mark those from the chosen days.
     pub fn apply_day_filter(&mut self) {
-        use crate::dates::DayMode;
         let page = self.page;
-        let mut veil: std::collections::HashSet<Id> = self.board.objects.iter().filter(|o| o.page != page).map(|o| o.id).collect();
-        if self.cal_days.is_empty() || self.day_mode == DayMode::All {
+        // Off the board: other pages, and hidden layers.
+        let hidden_layers: Vec<Id> = self.board.layers.iter().filter(|l| l.hidden).map(|l| l.id).collect();
+        let veil: std::collections::HashSet<Id> = self.board.objects.iter().filter(|o| o.page != page || hidden_layers.contains(&o.layer)).map(|o| o.id).collect();
+        if self.cal_days.is_empty() {
             self.day_shown.clear();
             self.day_direct.clear();
         } else {
             let (shown, direct) = crate::dates::matching(&self.board, &self.cal_days);
-            if self.day_mode == DayMode::Only {
-                veil.extend(self.board.objects.iter().map(|o| o.id).filter(|id| !shown.contains(id)));
-                self.day_shown.clear();
-                self.day_direct.clear();
-            } else {
-                self.day_shown = shown;
-                self.day_direct = direct;
-            }
+            self.day_shown = shown;
+            self.day_direct = direct;
         }
         if !veil.is_empty() {
             self.selection.retain(|id| !veil.contains(id));
@@ -614,8 +649,9 @@ impl Editor {
 
     // ── lock, opacity, comments, collapse ──
 
+    /// Locked itself, or on a locked layer.
     pub fn is_locked(&self, id: Id) -> bool {
-        self.board.get(id).is_some_and(|o| o.locked)
+        self.board.get(id).is_some_and(|o| o.locked || self.board.layer_of(o).is_some_and(|l| l.locked))
     }
 
     /// Lock the selection, or unlock it if everything in it is already locked.
@@ -824,7 +860,7 @@ impl Editor {
         let wires = self.board.wires.iter().filter(|w| ids.contains(&w.from) && ids.contains(&w.to)).cloned().collect();
         let images = objects
             .iter()
-            .filter_map(|o| if let Kind::Image { image } = o.kind { self.board.images.get(&image).map(|a| (image, a.clone())) } else { None })
+            .filter_map(|o| if let Kind::Image { image, .. } = o.kind { self.board.images.get(&image).map(|a| (image, a.clone())) } else { None })
             .collect();
         Clip { objects, wires, images }
     }
@@ -846,9 +882,10 @@ impl Editor {
     }
 
     /// Paste the internal clip with new ids, offset by `offset`.
-    fn paste_clip(&mut self, clip: &Clip, offset: Vec2) {
+    /// Add copies of `clip`, moved by `offset`, and select them. Returns each original's copy.
+    fn paste_clip(&mut self, clip: &Clip, offset: Vec2) -> HashMap<Id, Id> {
         if clip.objects.is_empty() {
-            return;
+            return HashMap::new();
         }
         self.mark_changed();
         let mut map: HashMap<Id, Id> = HashMap::new();
@@ -863,7 +900,7 @@ impl Editor {
             let mut n = o.clone();
             n.id = self.board.new_id();
             n.translate(offset);
-            if let Kind::Image { image } = &mut n.kind {
+            if let Kind::Image { image, .. } = &mut n.kind {
                 if let Some(x) = img_map.get(image) {
                     *image = *x;
                 }
@@ -888,6 +925,7 @@ impl Editor {
                 if let Some(nid) = self.board.connect(*a, w.from_side, *b, w.to_side, w.style) {
                     if let Some(nw) = self.board.wire_mut(nid) {
                         nw.label = w.label.clone();
+                        nw.color = w.color;
                     }
                 }
             }
@@ -899,6 +937,7 @@ impl Editor {
         new_ids.retain(|id| !inner.contains(id));
         self.selection = new_ids;
         self.selected_wire = None;
+        map
     }
 
     pub fn duplicate(&mut self) {
@@ -909,6 +948,22 @@ impl Editor {
         self.paste_clip(&clip, vec2(24.0, 24.0));
     }
 
+    /// Copies of the selection in the same place, selected (Ctrl+drag moves them). Returns each
+    /// selected item with its copy. Copies are never locked, so they can be dragged.
+    pub fn copy_in_place(&mut self) -> Vec<(Id, Id)> {
+        let originals = self.selection.clone();
+        let clip = self.clip_from_selection();
+        let map = self.paste_clip(&clip, Vec2::ZERO);
+        let pairs: Vec<(Id, Id)> = originals.iter().filter_map(|o| map.get(o).map(|c| (*o, *c))).collect();
+        for (_, c) in &pairs {
+            if let Some(o) = self.board.get_mut(*c) {
+                o.locked = false;
+            }
+        }
+        self.say(format!("Copying {}: drop it where it goes", plural(pairs.len(), "item", "items")));
+        pairs
+    }
+
     /// Paste from the system clipboard: our own objects, an image (for example a screenshot) or text.
     pub fn paste(&mut self) {
         let at = self.paste_point();
@@ -916,14 +971,16 @@ impl Editor {
             Ok(cb) => cb,
             Err(_) => {
                 let clip = self.clip.clone();
-                return self.paste_clip(&clip, vec2(24.0, 24.0));
+                self.paste_clip(&clip, vec2(24.0, 24.0));
+                return;
             }
         };
         let text = cb.get_text().ok();
         if text.as_deref() == Some(CLIPBOARD_MARKER) {
             let clip = self.clip.clone();
             if let Some(b) = clip.objects.iter().map(|o| o.rect()).reduce(|a, b| a.union(b)) {
-                return self.paste_clip(&clip, at - b.center());
+                self.paste_clip(&clip, at - b.center());
+                return;
             }
             return;
         }
@@ -977,7 +1034,7 @@ impl Editor {
         // Natural size, capped so a large photo does not cover the whole board.
         let scale = (640.0 / w.max(h) as f32).min(1.0);
         let size = vec2(w as f32 * scale, h as f32 * scale);
-        let id = self.board.add(Rect::from_center_size(at, size), Kind::Image { image }, Style::default());
+        let id = self.board.add(Rect::from_center_size(at, size), Kind::Image { image, crop: None }, Style::default());
         if let Some(n) = name {
             if let Some(o) = self.board.get_mut(id) {
                 o.label = n.to_owned();
@@ -1035,6 +1092,23 @@ impl Editor {
         }
     }
 
+    /// A box is being drawn (the arrow keys then shape its grid instead of nudging).
+    pub fn drawing_box(&self) -> bool {
+        matches!(self.drag, Drag::Box { .. })
+    }
+
+    /// Fit the view to the selected items (or the selected connection's ends).
+    pub fn zoom_to_selection(&mut self) {
+        let mut ids = self.selection.clone();
+        if let Some(w) = self.selected_wire.and_then(|w| self.board.wire(w)) {
+            ids.extend([w.from, w.to]);
+        }
+        match ids.iter().filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b)) {
+            Some(b) => self.camera.fit(self.canvas_rect, b.expand(b.width().max(b.height()) * 0.08 + 24.0)),
+            None => self.say("Select something to zoom to"),
+        }
+    }
+
     pub fn reset_zoom(&mut self) {
         let r = self.canvas_rect;
         let c = self.camera.to_world(r.min, r.center());
@@ -1055,7 +1129,18 @@ impl Editor {
 
     pub fn load(&mut self, path: &Path) -> Result<(), String> {
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let f: FileV1 = serde_json::from_str(&text).map_err(|e| format!("not an Overlay board ({e})"))?;
+        self.load_text(&text, Some(path))
+    }
+
+    /// The demo board that ships inside the app (opened untitled, so saving asks where).
+    pub fn load_demo(&mut self) {
+        if let Err(e) = self.load_text(include_str!("../examples/demo.overlay"), None) {
+            self.say(format!("Could not open the demo: {e}"));
+        }
+    }
+
+    fn load_text(&mut self, text: &str, path: Option<&Path>) -> Result<(), String> {
+        let f: FileV1 = serde_json::from_str(text).map_err(|e| format!("not an Overlay board ({e})"))?;
         if f.format != FILE_FORMAT {
             return Err("not an Overlay board".into());
         }
@@ -1066,7 +1151,7 @@ impl Editor {
         self.board.gc_images();
         self.history = Undo::new(&self.board, self.undo_steps);
         self.camera = f.camera;
-        self.path = Some(path.to_owned());
+        self.path = path.map(Path::to_owned);
         let n = self.board.objects.len();
         self.say(format!("Opened {}, {}", plural(n, "object", "objects"), plural(self.board.wires.len(), "connection", "connections")));
         Ok(())

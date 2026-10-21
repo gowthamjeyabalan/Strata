@@ -196,7 +196,7 @@ pub fn render(ctx: &egui::Context, ed: &mut Editor, world: Rect, scale: f32, bac
     let mut textures: HashMap<TextureId, Tex> = HashMap::new();
     textures.insert(TextureId::default(), Tex::from(&ctx.fonts(|f| f.image())));
     for o in &ed.board.objects {
-        if let crate::board::Kind::Image { image } = o.kind {
+        if let crate::board::Kind::Image { image, .. } = o.kind {
             let Some(Some(handle)) = ed.textures.get(&image) else { continue };
             if textures.contains_key(&handle.id()) {
                 continue;
