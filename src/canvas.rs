@@ -511,6 +511,9 @@ impl Editor {
                 points = board::simplify(&points, 0.25 / self.camera.zoom);
             }
         }
+        if brush.is_some() {
+            self.brush_last = points.last().copied();
+        }
         let b = Rect::from_points(&points);
         let local = points.iter().map(|p| [p.x - b.min.x, p.y - b.min.y]).collect();
         self.mark_changed();
@@ -985,7 +988,11 @@ impl Editor {
                     self.clear_selection();
                 }
             }
-            Tool::Pen | Tool::Pencil | Tool::Marker | Tool::Highlighter => self.create_path(vec![w], false, self.tool.brush()),
+            // As in Photoshop: Shift+click draws a straight stroke from where the last one ended.
+            Tool::Pen | Tool::Pencil | Tool::Marker | Tool::Highlighter => match self.brush_last.filter(|_| mods.shift) {
+                Some(from) => self.create_path(vec![from, w], false, self.tool.brush()),
+                None => self.create_path(vec![w], false, self.tool.brush()),
+            },
             Tool::Eraser => {
                 if self.erase_at(w) {
                     self.mark_changed();
@@ -1244,6 +1251,9 @@ impl Editor {
         self.board.update_groups();
         if self.tool != Tool::Polyline {
             self.poly.clear();
+        }
+        if self.tool.brush().is_none() {
+            self.brush_last = None;
         }
 
         // ── cursor ──
@@ -1904,6 +1914,13 @@ impl Editor {
                     painter.extend(egui::Shape::dashed_line(&pts.into_iter().map(to_s).collect::<Vec<_>>(), Stroke::new(2.0, p.accent), 6.0, 4.0));
                     painter.circle_filled(to_s(at), 4.0, p.accent);
                 }
+            }
+        }
+        // Holding Shift with a brush: where a click would draw a straight stroke.
+        if let (Some(b), Some(from), Some(to), Drag::None) = (self.tool.brush(), self.brush_last, self.hover_world, &self.drag) {
+            if painter.ctx().input(|i| i.modifiers.shift) {
+                let w = (self.brush_widths[b.index()] * z).max(0.5);
+                paint_stroke(painter, &[to_s(from), to_s(to)], Stroke::new(w, ink.gamma_multiply(b.alpha() * 0.5)), b);
             }
         }
         if self.tool == Tool::Polyline && !self.poly.is_empty() {

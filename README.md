@@ -23,7 +23,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 ## Features
 
 **Draw and place**
-- Pen, pencil, marker and highlighter, each with its own width from hairline (0.25) to very thick (200). Strokes are smoothed as you draw.
+- Pen, pencil, marker and highlighter, each with its own width from hairline (0.25) to very thick (1000). Strokes are smoothed as you draw. As in Photoshop, Shift+click draws a straight stroke from where the last one ended.
 - Lines, arrows, rectangles, ellipses and text.
 - Polylines: click to add corners, straight or as a smooth curve. Click the first point again to close the shape and fill it.
 - Images by drag and drop from Explorer, Ctrl+V (including screenshots) or Ctrl+I.

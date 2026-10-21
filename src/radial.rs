@@ -229,7 +229,7 @@ fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
             enabled: true,
             act: None,
             // Line width for what is drawn next, and for the selection.
-            children: [0.5f32, 2.0, 6.0, 16.0, 40.0, 100.0]
+            children: [0.5f32, 2.0, 6.0, 16.0, 40.0, 100.0, 250.0, 600.0]
                 .into_iter()
                 .map(|w| Child { label: format!("Width {w}"), look: Look::Width(w), act: Act::Width(w), current: (ed.tool_width() - w).abs() < 0.01, sub: Vec::new() })
                 .collect(),

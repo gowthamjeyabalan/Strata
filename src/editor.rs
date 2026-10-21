@@ -61,6 +61,8 @@ pub struct Editor {
     pub(crate) page_cams: HashMap<Id, Camera>,
     /// A page whose name is being typed, and the name so far.
     pub(crate) renaming_page: Option<(Id, String)>,
+    /// Where the last brush stroke ended: Shift+click draws a straight stroke from here.
+    pub(crate) brush_last: Option<Pos2>,
     /// Corners of the polyline being drawn, in world space.
     pub poly: Vec<Pos2>,
     /// The polyline tool draws a smooth curve through its points.
@@ -181,6 +183,7 @@ impl Default for Editor {
             present_cam: None,
             page_cams: HashMap::new(),
             renaming_page: None,
+            brush_last: None,
             poly: Vec::new(),
             poly_curved: false,
             palette: None,

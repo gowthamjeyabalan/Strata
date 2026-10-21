@@ -294,7 +294,7 @@ impl Brush {
 
 /// Smallest and largest brush width, in world units.
 pub const MIN_WIDTH: f32 = 0.25;
-pub const MAX_WIDTH: f32 = 200.0;
+pub const MAX_WIDTH: f32 = 1000.0;
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Kind {
