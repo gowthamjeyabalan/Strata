@@ -58,6 +58,7 @@ struct Settings {
     start_view: Option<bool>,
     custom_colors: Option<Vec<[u8; 3]>>,
     recent: Option<Vec<PathBuf>>,
+    glass: Option<theme::Glass>,
     workspaces: Option<Vec<(String, DockState<Tab>)>>,
 }
 
@@ -118,6 +119,11 @@ pub struct App {
     /// The name being typed for a new workspace.
     ws_name: String,
     logo: Option<egui::TextureHandle>,
+    /// See-through surfaces and the Windows backdrop.
+    glass: theme::Glass,
+    window: crate::backdrop::Window,
+    /// The glass settings and dark mode last applied, and whether Windows took the backdrop.
+    backdrop_set: Option<(theme::Glass, bool, bool)>,
     /// Frame timing, only when OVERLAY_PERF names a file to write it to.
     perf: Option<Perf>,
 }
@@ -168,6 +174,19 @@ impl Perf {
 }
 
 impl App {
+    /// Give Windows the backdrop (again when it or dark mode changes) and restyle the see-through
+    /// surfaces when the settings change.
+    fn apply_glass(&mut self, ctx: &egui::Context) {
+        let dark = ctx.theme() == egui::Theme::Dark;
+        let ok = match self.backdrop_set {
+            Some((g, d, _)) if g == self.glass && d == dark => return,
+            Some((g, d, ok)) if g.backdrop == self.glass.backdrop && d == dark => ok,
+            _ => self.window.set(self.glass.backdrop, dark),
+        };
+        theme::set_glass(ctx, self.glass, ok);
+        self.backdrop_set = Some((self.glass, dark, ok));
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
         theme::apply(&cc.egui_ctx, settings.appearance);
@@ -231,6 +250,9 @@ impl App {
             workspaces: settings.workspaces.clone().unwrap_or_default(),
             ws_name: String::new(),
             logo: None,
+            glass: settings.glass.unwrap_or_default(),
+            window: crate::backdrop::Window::of(cc),
+            backdrop_set: None,
             perf: Perf::from_env(),
         }
     }
@@ -761,6 +783,11 @@ impl TabViewer for Viewer<'_> {
 }
 
 impl eframe::App for App {
+    /// Nothing behind the panels: with a backdrop, Windows draws it there.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let started = std::time::Instant::now();
         self.frame(ui);
@@ -787,6 +814,7 @@ impl eframe::App for App {
 impl App {
     fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.apply_glass(&ctx);
 
         // Presenting takes the whole window, full screen, until Esc.
         let presenting = self.ed.presenting.is_some();
@@ -844,22 +872,22 @@ impl App {
         }
         if self.start_open {
             let p = pal(&ctx);
-            egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| self.start_view(ui));
-            crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view });
+            egui::Panel::top("top-bar").frame(egui::Frame::new().fill(theme::panel_fill(p)).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel_fill(p))).show(ui, |ui| self.start_view(ui));
+            crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view, glass: &mut self.glass, backdrop_ok: self.backdrop_set.is_some_and(|(_, _, ok)| ok) });
             self.save_dialog(&ctx);
             return;
         }
 
         let p = pal(&ctx);
-        egui::Panel::top("top-bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
+        egui::Panel::top("top-bar").frame(egui::Frame::new().fill(theme::panel_fill(p)).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
         // New items go on the current page and layer; the item list stays in layer order.
         self.ed.board.fix_pages(&mut self.ed.page);
         self.ed.board.fix_layers(&mut self.ed.active_layer);
         // The Calendar's chosen days hide or fade the other items.
         self.ed.apply_day_filter();
         self.ed.canvas_visible = false;
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel_fill(p))).show(ui, |ui| {
             let style = theme::dock_style(ui.ctx());
             DockArea::new(&mut self.dock)
                 .style(style)
@@ -914,7 +942,7 @@ impl App {
         crate::insert::show(&ctx, &mut self.ed);
         panels::comments_window(&ctx, &mut self.ed);
         panels::colour_picker(&ctx, &mut self.ed);
-        crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view });
+        crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view, glass: &mut self.glass, backdrop_ok: self.backdrop_set.is_some_and(|(_, _, ok)| ok) });
         if (ctx.zoom_factor() - self.ui_scale).abs() > 1e-3 {
             ctx.set_zoom_factor(self.ui_scale);
         }
@@ -1074,6 +1102,7 @@ impl App {
             start_view: Some(self.start_view),
             custom_colors: Some(self.ed.custom_colors.clone()),
             recent: Some(self.recent.clone()),
+            glass: Some(self.glass),
             workspaces: Some(self.workspaces.clone()),
             keys: Some(self.ed.keys.clone()),
         };

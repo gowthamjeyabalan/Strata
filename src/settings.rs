@@ -3,7 +3,7 @@
 use crate::board::{self, Brush, Ink, Shape, WireStyle};
 use crate::editor::Editor;
 use crate::keys::{Action, Combo};
-use crate::theme::{self, Appearance, UiExt, pal};
+use crate::theme::{self, Appearance, Backdrop, UiExt, pal};
 use egui::{CornerRadius, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 
 const SECTIONS: [&str; 9] = ["Appearance", "Board", "Drawing", "Notes", "Radial menu", "Undo", "Files", "Keyboard shortcuts", "About"];
@@ -30,6 +30,9 @@ pub struct AppPrefs<'a> {
     pub ui_scale: &'a mut f32,
     /// Show the start view when Overlay opens (otherwise reopen the last board).
     pub start_view: &'a mut bool,
+    pub glass: &'a mut theme::Glass,
+    /// Windows is drawing the backdrop.
+    pub backdrop_ok: bool,
 }
 
 /// One setting: its name and a line about it on the left, the control on the right.
@@ -172,6 +175,33 @@ fn appearance(ui: &mut Ui, app: &mut AppPrefs) {
         ui.spacing_mut().slider_width = 170.0;
         if ui.add(egui::Slider::new(&mut s, 75.0..=150.0).suffix("%").step_by(5.0)).changed() {
             *app.ui_scale = s / 100.0;
+        }
+    });
+
+    group(ui, "TRANSLUCENCY");
+    let g = &mut *app.glass;
+    row(ui, "Window backdrop", "The material Windows 11 draws behind Overlay. Mica takes a soft tint from the desktop wallpaper, Mica Alt a stronger one, and Acrylic blurs whatever is behind the window.", |ui| {
+        ui.set_width(300.0);
+        ui.segmented(&mut g.backdrop, &[(Backdrop::None, "None"), (Backdrop::Mica, "Mica"), (Backdrop::MicaAlt, "Mica Alt"), (Backdrop::Acrylic, "Acrylic")]);
+    });
+    let on = g.backdrop != Backdrop::None;
+    if on && !app.backdrop_ok {
+        ui.label(theme::secondary(ui, "This version of Windows cannot draw a backdrop (it needs Windows 11, version 22H2 or later), so panels stay solid."));
+    }
+    let percent = |ui: &mut Ui, v: &mut f32, min: f32, enabled: bool| {
+        let mut s = *v * 100.0;
+        ui.spacing_mut().slider_width = 170.0;
+        if ui.add_enabled(enabled, egui::Slider::new(&mut s, min..=100.0).suffix("%").step_by(5.0)).changed() {
+            *v = s / 100.0;
+        }
+    };
+    let solid = "Needs a window backdrop.";
+    row(ui, "Panels", if on { "How solid the menu bar, the panels and the space around them are; lower lets more of the backdrop through." } else { solid }, |ui| percent(ui, &mut g.panels, 20.0, on));
+    row(ui, "Board", if on { "How solid the board is. At 100% it is a plain surface; lower lets the backdrop through behind your work." } else { solid }, |ui| percent(ui, &mut g.board, 20.0, on));
+    row(ui, "Menus and floating windows", "Menus, popups, the radial menu and windows such as this one, over the board and panels.", |ui| percent(ui, &mut g.floating, 50.0, true));
+    ui.horizontal(|ui| {
+        if ui.add_enabled(*g != theme::Glass::default(), egui::Button::new("Reset translucency")).clicked() {
+            *g = theme::Glass::default();
         }
     });
 }

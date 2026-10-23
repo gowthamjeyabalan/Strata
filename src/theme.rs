@@ -107,9 +107,83 @@ pub const LIGHT: Pal = Pal {
     shadow_popup: 36,
 };
 
-/// `c` at `alpha` (0 to 255) opacity.
-pub fn translucent(c: Color32, alpha: u8) -> Color32 {
-    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+/// The material Windows draws behind the window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
+pub enum Backdrop {
+    None,
+    Mica,
+    MicaAlt,
+    #[default]
+    Acrylic,
+}
+
+/// See-through surfaces, as in Windows 11: the backdrop behind the window and how much of it shows
+/// through each surface (opacity, 0 to 1).
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Glass {
+    pub backdrop: Backdrop,
+    /// The menu bar, the panels and the space around them.
+    pub panels: f32,
+    pub board: f32,
+    /// Menus, popups, floating windows and the radial menu.
+    pub floating: f32,
+}
+
+impl Default for Glass {
+    fn default() -> Self {
+        Glass { backdrop: Backdrop::Acrylic, panels: 0.4, board: 1.0, floating: 0.88 }
+    }
+}
+
+static GLASS: std::sync::RwLock<Glass> = std::sync::RwLock::new(Glass { backdrop: Backdrop::None, panels: 1.0, board: 1.0, floating: 1.0 });
+/// Windows took the backdrop (otherwise panels and the board stay solid: there is nothing behind them).
+static BACKDROP_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn glass() -> Glass {
+    GLASS.read().map(|g| *g).unwrap_or_default()
+}
+
+/// Use `g`, with `backdrop_on` saying whether Windows is drawing its backdrop. Restyles egui.
+pub fn set_glass(ctx: &Context, g: Glass, backdrop_on: bool) {
+    if let Ok(mut w) = GLASS.write() {
+        *w = g;
+    }
+    BACKDROP_ON.store(backdrop_on && g.backdrop != Backdrop::None, std::sync::atomic::Ordering::Relaxed);
+    ctx.style_mut_of(Theme::Dark, |s| glass_visuals(s, &DARK));
+    ctx.style_mut_of(Theme::Light, |s| glass_visuals(s, &LIGHT));
+}
+
+fn glass_visuals(s: &mut egui::Style, p: &Pal) {
+    s.visuals.panel_fill = panel_fill(p);
+    s.visuals.window_fill = floating_fill(p);
+}
+
+/// How opaque panels and the board are: solid without a backdrop.
+fn see_through(a: f32) -> f32 {
+    if BACKDROP_ON.load(std::sync::atomic::Ordering::Relaxed) { a.clamp(0.0, 1.0) } else { 1.0 }
+}
+
+/// The fill of the menu bar, the panels and the space around them.
+pub fn panel_fill(p: &Pal) -> Color32 {
+    p.bg.gamma_multiply(see_through(glass().panels))
+}
+
+/// The fill of a panel's body (a dock tab), over the space around it: lighter, so the two together
+/// are about as see-through as the setting.
+pub fn panel_body_fill(p: &Pal) -> Color32 {
+    let a = see_through(glass().panels);
+    p.bg_elevated.gamma_multiply(if a >= 1.0 { 1.0 } else { a * 0.6 })
+}
+
+pub fn board_fill(p: &Pal) -> Color32 {
+    p.canvas.gamma_multiply(see_through(glass().board))
+}
+
+/// Menus, popups, floating windows and the radial menu: see-through over the board too, so this
+/// applies with or without a backdrop.
+pub fn floating_fill(p: &Pal) -> Color32 {
+    p.window_fill.gamma_multiply(glass().floating.clamp(0.3, 1.0))
 }
 
 /// The palette for the appearance egui is drawing with right now.
@@ -211,9 +285,9 @@ fn style(style: &mut egui::Style, p: &Pal, dark: bool) {
     let v = &mut style.visuals;
     *v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
     v.override_text_color = None;
-    v.panel_fill = p.bg;
-    // Floating windows, menus and popups let the board show through a little.
-    v.window_fill = translucent(p.window_fill, 232);
+    v.panel_fill = panel_fill(p);
+    // Floating windows, menus and popups let the board show through (Settings > Appearance).
+    v.window_fill = floating_fill(p);
     v.window_stroke = Stroke::new(1.0, p.window_stroke);
     v.window_corner_radius = CornerRadius::same(12);
     v.menu_corner_radius = CornerRadius::same(10);
@@ -391,8 +465,8 @@ pub fn dock_style(ctx: &Context) -> egui_dock::Style {
     s.tab.hline_below_active_tab_name = false;
     let rr = CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 };
     for (st, fill, text) in [
-        (&mut s.tab.active, p.bg_elevated, p.text),
-        (&mut s.tab.focused, p.bg_elevated, p.text_strong),
+        (&mut s.tab.active, panel_body_fill(p), p.text),
+        (&mut s.tab.focused, panel_body_fill(p), p.text_strong),
         (&mut s.tab.inactive, Color32::TRANSPARENT, p.text_secondary),
         (&mut s.tab.hovered, p.bg_control.gamma_multiply(0.6), p.text),
     ] {
@@ -404,7 +478,7 @@ pub fn dock_style(ctx: &Context) -> egui_dock::Style {
     s.tab.active_with_kb_focus = s.tab.active.clone();
     s.tab.inactive_with_kb_focus = s.tab.inactive.clone();
     s.tab.focused_with_kb_focus = s.tab.focused.clone();
-    s.tab.tab_body.bg_fill = p.bg_elevated;
+    s.tab.tab_body.bg_fill = panel_body_fill(p);
     s.tab.tab_body.stroke = Stroke::NONE;
     s.tab.tab_body.corner_radius = CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 };
     s.tab.tab_body.inner_margin = Margin::symmetric(12, 8);

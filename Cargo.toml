@@ -21,12 +21,14 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 arboard = "3"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# The native window, for the Windows 11 backdrop (eframe already uses it).
+raw-window-handle = "0.6"
 
 [build-dependencies]
 winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.60", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_Foundation"] }
 
 [profile.release]
 opt-level = 3

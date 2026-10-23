@@ -2019,6 +2019,7 @@ dependencies = [
  "egui",
  "egui_dock",
  "image",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

@@ -609,7 +609,7 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
     for (k, a) in [(10.0, 18u8), (5.0, 26), (2.0, 34)] {
         painter.circle_filled(c + vec2(0.0, 3.0), R1 + k, Color32::from_black_alpha(a));
     }
-    painter.circle(c, R1, crate::theme::translucent(p.window_fill, 228), Stroke::new(1.0, p.window_stroke));
+    painter.circle(c, R1, crate::theme::floating_fill(p), Stroke::new(1.0, p.window_stroke));
     // Thin dividers between wedges.
     for i in 0..n {
         let a = wedge_angle(i, n) + step * 0.5;

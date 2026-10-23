@@ -1447,7 +1447,7 @@ impl Editor {
 
         // ── draw ──
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, p.canvas);
+        painter.rect_filled(rect, CornerRadius::ZERO, theme::board_fill(p));
         if self.show_grid {
             self.draw_grid(&painter, rect, p);
         }
