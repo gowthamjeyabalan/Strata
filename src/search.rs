@@ -273,6 +273,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) -> Option<Cmd> {
                         ed.camera.look_at(ed.canvas_rect, c);
                     }
                     ed.selection.clear();
+                    ed.clear_wires();
                     ed.selected_wire = Some(id);
                 }
             }

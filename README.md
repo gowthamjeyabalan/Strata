@@ -24,14 +24,15 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 
 **Draw and place**
 - Pen, pencil, marker and highlighter, each with its own width from hairline (0.25) to very thick (1000). Strokes are smoothed as you draw. As in Photoshop, Shift+click draws a straight stroke from where the last one ended.
-- Lines, arrows, rectangles, ellipses and text.
+- Lines, arrows, rectangles, ellipses and text. While typing, a small bar sets bold, italic, underline, size, colour and alignment (text boxes and the text in shapes).
+- Grid notes (G): a dotted area like a frame, full of dots; drag from dot to dot to draw straight lines on it.
 - Polylines: click to add corners, straight or as a smooth curve. Click the first point again to close the shape and fill it.
 - Images by drag and drop from Explorer, Ctrl+V (including screenshots) or Ctrl+I.
 - Eleven flowchart shapes: empty node, process, decision, start or end, input or output, document, database, subprocess, manual input, connector and note.
 
 **Connect everything**
 - Every item has a port in the middle of each side. Drag from a port to another item to connect them.
-- Curved, straight or right-angle (elbow) connections, with labels such as "yes" or "no", in any colour.
+- Curved, straight or right-angle (elbow) connections, solid, dashed or dotted, thin to heavy, in any colour, with captions such as "yes" or "no" in four sizes, placed anywhere along the line, with or without a box.
 - Ctrl+drag an item to drag a copy of it; the copy is connected to the original where you drop it.
 - Press `/` to add an item from a searchable list. With a node selected, the new item appears beside it, already connected and ready to type in, so a flowchart can be built from the keyboard alone.
 - Drag a connection into empty space and the same list opens there.
@@ -39,11 +40,12 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 **Organise**
 - Named, coloured groups that move together, have their own ports, nest, and collapse into a single node.
 - Sketches: group strokes alone and they join into one item with no frame, which moves, resizes and connects as one.
-- Layers you make yourself: name them, reorder them to choose what is in front, open them to list their items and drag items between them, hide or lock them, and give them a colour that their items without a colour of their own take. Right-click a layer for everything else, such as selecting its items.
+- Layers you make yourself: name them, reorder them to choose what is in front, open them to list their items (a group or sketch is one row that opens to show what is inside) and drag items between them, hide or lock them, and give them a colour that their items without a colour of their own take. Right-click a layer for everything else, such as selecting its items.
 - Snapping to other items' edges, centres and equal gaps while you move or resize, with guide lines. Hold Alt to skip it.
 - Lock items, change opacity, and add comment threads to any item.
 - Rotate any item by the round handle above it (Shift keeps 15° steps), and crop images (double-click one).
-- Drag left to right to select what is wholly inside the box, or right to left to select whatever it touches.
+- Drag left to right to select what is wholly inside the box, or right to left to select whatever it touches; connections are picked up too. Shift+click adds a connection.
+- Several selected items scale together by the handles of the dashed box around them, or by Smaller and Larger in Properties; text grows with them.
 - While drawing a box, the arrow keys split it into a grid: right and left for columns, up and down for rows.
 - A radial menu: hold the right mouse button on an item, or hold it still on empty board, and move to an action, then let go. Add opens sections (Draw, Shapes, Flowchart, Note, Image) that each open a further ring of tools or items, Tools has select, pan and connect, Width and Colour set the line for the selection and for what you draw next, View has zoom to fit, the Overview and snapping, and Layer and Arrange open a second ring to pick from; Delete, Duplicate, Lock, Group and Properties act straight away. This is where the tools live; there is no toolbar.
 - A floating Overview map of the whole board, and zoom to the selection (Shift+2).
@@ -53,7 +55,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Markdown notes: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
 - Place a note on the board as a card: it can be resized, scrolls inside itself, and connects, groups and layers like any item. The same note can have several cards.
 - Pasting markdown or dropping `.md` files onto the window makes notes.
-- Pictures in notes: `![name](path)` on a line of its own, or Insert image… in a note's tab to keep the picture in the board.
+- Pictures in notes: `![name](path)` on a line of its own, Insert image… in a note's tab, or Ctrl+V of a screenshot or of images copied on the board.
 - Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names; a link to a note that does not exist yet shows paler, and following it (a click when reading, Ctrl+click when writing) makes that note and opens it. Dotted lines join the cards of linked notes on the board (View > Links between note cards).
 
 **Pages, frames and presenting**
@@ -103,7 +105,8 @@ These are the defaults; every tool and most commands can be given other keys in 
 | Ctrl+E | Export an image |
 | Ctrl+K | Search everything, run a command |
 | Ctrl+, | Settings |
-| F, F5 | Frame tool, present |
+| F, G, F5 | Frame tool, grid note tool, present |
+| Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline (while typing) |
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | New, open, save, save as |
 
 Pan with the middle mouse button, the right mouse button on empty board, or hold Space and drag. Holding the right button on an item opens the radial menu. The mouse wheel zooms at the pointer.
@@ -129,6 +132,7 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Notes | New note starts one (in the folder picked in the list) and opens it in a tab; Write, Split and Read switch between the editor and the preview. Double-click a note in the list, or its card on the board, to open it. Click notes in the list to pick them (Ctrl-click for more) and press Delete to delete them. New folder makes a folder; double-click its name to rename it, drag notes onto it to move them in, and click its arrow to fold it. Holding the right button on a note in the list opens its ring: open, place on board, move to a folder, delete. On the board, a selected note card's ring has a Note section with the same. Place on board adds a card; The mouse wheel over a card scrolls it (Ctrl+wheel zooms). Click a checkbox on a card to tick it, or a link to follow it. Deleting a note also deletes its cards. |
 | Settings | File > Settings…, Ctrl+, or Ctrl+K "Settings". Sections for appearance (mode, interface size), the board, drawing, notes, the radial menu, undo, files, and keyboard shortcuts. In Keyboard shortcuts, click a shortcut and press the new keys; a shortcut belongs to one action, so giving it to another moves it. Esc, Delete, Enter, the arrows, copy and paste, and Space stay fixed. |
 | Pages | Click a page button under the board to show it, double-click to rename it, + adds one, and the × beside the current page deletes it with what is on it (Ctrl+Z brings it back). Each page keeps its own view. |
+| Grid notes | Drag with the grid note tool (G), or Add > Shapes. Drag from one dot to another to draw a line in the current drawing colour and width; the eraser takes lines off, and Properties changes the dot spacing or clears the lines. Like a frame, it is picked by its edge or name and carries what is on it. |
 | Frames | Frames sit behind everything and are picked by their edge or name. Double-click the name to rename it. In the Frames panel, click a frame to go to it, use the arrows to change the slide order, and ▶ to present from it. |
 | Calendar | Click a day in the calendar under the notes to highlight what was made or changed that day (Ctrl-click for more days, click again or Clear to stop). The arrows or the mouse wheel change the month. |
 | Panels | Notes, Calendar, Properties, Layers and Frames are dockable tabs. The Window menu turns them on and off, saves the arrangement as a named workspace to come back to, and restores the default layout. |

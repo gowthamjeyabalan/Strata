@@ -40,7 +40,7 @@ fn swatch(ui: &mut Ui, ink: Ink, selected: bool) -> egui::Response {
 }
 
 /// Swatch row. Returns the picked ink if it changed.
-fn ink_row(ui: &mut Ui, current: Ink) -> Option<Ink> {
+pub(crate) fn ink_row(ui: &mut Ui, current: Ink) -> Option<Ink> {
     let mut picked = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
@@ -85,12 +85,18 @@ fn kind_summary(ed: &Editor) -> String {
 pub fn properties_ui(ui: &mut Ui, ed: &mut Editor) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         theme::panel_body(ui, |ui| {
-            if let Some(w) = ed.selected_wire {
-                wire_props(ui, ed, w);
+            let wires = ed.wires_selected();
+            if ed.selection.is_empty() && !wires.is_empty() {
+                wire_props(ui, ed, &wires);
             } else if ed.selection.is_empty() {
                 new_object_props(ui, ed);
             } else {
                 selection_props(ui, ed);
+                // Connections picked up by a selection box along with the items.
+                if !wires.is_empty() {
+                    ui.add_space(8.0);
+                    wire_props(ui, ed, &wires);
+                }
             }
         });
     });
@@ -467,7 +473,33 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         }
     }
 
-    if single && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. }) {
+    if let (true, Kind::Grid { spacing, lines }) = (single, &o.kind) {
+        theme::heading(ui, "GRID");
+        ui.label(theme::secondary(ui, "Drag from dot to dot to draw a line; the eraser takes lines off. New lines take the colour and width set for drawing."));
+        let mut sp = *spacing;
+        if ui.add(egui::Slider::new(&mut sp, 8.0..=120.0).max_decimals(0).text("Dot spacing")).changed() {
+            ed.mark_changed();
+            if let Some(Kind::Grid { spacing, .. }) = ed.board.get_mut(o.id).map(|x| &mut x.kind) {
+                *spacing = sp;
+            }
+        }
+        let n = lines.len();
+        ui.horizontal(|ui| {
+            if ui.add_enabled(n > 0, egui::Button::new("Remove the last line")).clicked() {
+                ed.mark_changed();
+                if let Some(Kind::Grid { lines, .. }) = ed.board.get_mut(o.id).map(|x| &mut x.kind) {
+                    lines.pop();
+                }
+            }
+            if ui.add_enabled(n > 0, egui::Button::new("Clear")).on_hover_text(plural(n, "line", "lines")).clicked() {
+                ed.mark_changed();
+                if let Some(Kind::Grid { lines, .. }) = ed.board.get_mut(o.id).map(|x| &mut x.kind) {
+                    lines.clear();
+                }
+            }
+        });
+    }
+    if single && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. }) {
         theme::heading(ui, "ROTATION");
         ui.horizontal(|ui| {
             let mut deg = o.rotation.to_degrees();
@@ -544,6 +576,18 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         });
     }
 
+    if ed.selection.len() > 1 {
+        theme::heading(ui, "SIZE");
+        ui.horizontal(|ui| {
+            if ui.button("Smaller").on_hover_text("Scale the selection to 90%").clicked() {
+                ed.scale_selection(0.9);
+            }
+            if ui.button("Larger").on_hover_text("Scale the selection to 110%").clicked() {
+                ed.scale_selection(1.1);
+            }
+        });
+        ui.label(theme::secondary(ui, "Or drag the handles of the dashed box around them."));
+    }
     theme::heading(ui, "ARRANGE");
     ui.horizontal_wrapped(|ui| {
         if ui.button("Group").on_hover_text("Ctrl+G").clicked() {
@@ -576,8 +620,93 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
-fn wire_props(ui: &mut Ui, ed: &mut Editor, wid: Id) {
-    let Some(w) = ed.board.wire(wid).cloned() else { return };
+fn wire_props(ui: &mut Ui, ed: &mut Editor, wids: &[Id]) {
+    let Some(w) = wids.first().and_then(|id| ed.board.wire(*id)).cloned() else { return };
+    let wid = w.id;
+    let one = wids.len() == 1;
+    // A change made here goes to every selected connection.
+    let set = |ed: &mut Editor, f: &dyn Fn(&mut crate::board::Wire)| {
+        ed.mark_changed();
+        for id in wids {
+            if let Some(x) = ed.board.wire_mut(*id) {
+                f(x);
+            }
+        }
+    };
+    if one {
+        connection_ends(ui, ed, &w);
+    } else {
+        theme::heading(ui, "CONNECTIONS");
+        ui.label(theme::secondary(ui, format!("{} selected; changes go to all of them", wids.len())));
+    }
+    theme::heading(ui, "CAPTION");
+    if one {
+        let mut label = w.label.clone();
+        if ui.add(egui::TextEdit::singleline(&mut label).hint_text("For example: yes").desired_width(f32::INFINITY)).changed() {
+            ed.mark_changed();
+            if let Some(x) = ed.board.wire_mut(wid) {
+                x.label = label;
+            }
+        }
+    }
+    // How the caption looks: its size, where it sits along the line, and its box.
+    let mut size = w.label_size();
+    if ui.segmented(&mut size, &[(0.75, "Small"), (1.0, "Normal"), (1.4, "Large"), (2.0, "Huge")]) {
+        set(ed, &|x| x.label_size = size);
+    }
+    ui.horizontal(|ui| {
+        ui.label(theme::secondary(ui, "Along the line"));
+        let mut at = w.label_at;
+        if ui.add(egui::Slider::new(&mut at, 0.0..=1.0).show_value(false)).changed() {
+            set(ed, &|x| x.label_at = at);
+        }
+    });
+    let mut boxed = !w.label_plain;
+    if ui.switch(&mut boxed, "Box behind the caption").changed() {
+        set(ed, &|x| x.label_plain = !boxed);
+    }
+    theme::heading(ui, "COLOUR");
+    if let Some(ink) = ink_row(ui, w.color.unwrap_or(Ink::Auto)) {
+        set(ed, &|x| x.color = if ink == Ink::Auto { None } else { Some(ink) });
+    }
+    theme::heading(ui, "LINE");
+    let mut style = w.style;
+    if wire_style_control(ui, &mut style) {
+        set(ed, &|x| x.style = style);
+        ed.wire_style = style;
+    }
+    let mut dash = w.dash;
+    if dash_control(ui, &mut dash) {
+        set(ed, &|x| x.dash = dash);
+    }
+    let mut weight = w.weight();
+    if ui.segmented(&mut weight, &[(0.6, "Thin"), (1.0, "Normal"), (2.0, "Thick"), (3.5, "Heavy")]) {
+        set(ed, &|x| x.weight = weight);
+    }
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Reverse").clicked() {
+            set(ed, &|x| {
+                std::mem::swap(&mut x.from, &mut x.to);
+                std::mem::swap(&mut x.from_side, &mut x.to_side);
+            });
+        }
+        let danger = pal(ui.ctx()).danger;
+        if ui.button(RichText::new("Delete").color(danger)).clicked() {
+            if ed.selection.is_empty() {
+                ed.delete_selection();
+            } else {
+                // Only the connections, when items are selected as well.
+                ed.mark_changed();
+                ed.board.wires.retain(|x| !wids.contains(&x.id));
+                ed.clear_wires();
+            }
+        }
+    });
+}
+
+/// Where a connection starts and ends, each a link to that item.
+fn connection_ends(ui: &mut Ui, ed: &mut Editor, w: &crate::board::Wire) {
     theme::heading(ui, "CONNECTION");
     let from = ed.board.display_name(w.from);
     let to = ed.board.display_name(w.to);
@@ -586,50 +715,12 @@ fn wire_props(ui: &mut Ui, ed: &mut Editor, wid: Id) {
         ui.label(theme::secondary(ui, "From"));
         if ui.link(&from).clicked() {
             ed.selection = vec![w.from];
-            ed.selected_wire = None;
+            ed.clear_wires();
         }
         ui.label(theme::secondary(ui, "To"));
         if ui.link(&to).clicked() {
             ed.selection = vec![w.to];
-            ed.selected_wire = None;
-        }
-    });
-    theme::heading(ui, "LABEL");
-    let mut label = w.label.clone();
-    if ui.add(egui::TextEdit::singleline(&mut label).hint_text("For example: yes").desired_width(f32::INFINITY)).changed() {
-        ed.mark_changed();
-        if let Some(x) = ed.board.wire_mut(wid) {
-            x.label = label;
-        }
-    }
-    theme::heading(ui, "COLOUR");
-    if let Some(ink) = ink_row(ui, w.color.unwrap_or(Ink::Auto)) {
-        ed.mark_changed();
-        if let Some(x) = ed.board.wire_mut(wid) {
-            x.color = if ink == Ink::Auto { None } else { Some(ink) };
-        }
-    }
-    theme::heading(ui, "LINE");
-    let mut style = w.style;
-    if wire_style_control(ui, &mut style) {
-        ed.mark_changed();
-        if let Some(x) = ed.board.wire_mut(wid) {
-            x.style = style;
-        }
-        ed.wire_style = style;
-    }
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Reverse").clicked() {
-            ed.mark_changed();
-            if let Some(x) = ed.board.wire_mut(wid) {
-                std::mem::swap(&mut x.from, &mut x.to);
-                std::mem::swap(&mut x.from_side, &mut x.to_side);
-            }
-        }
-        let danger = pal(ui.ctx()).danger;
-        if ui.button(RichText::new("Delete").color(danger)).clicked() {
-            ed.delete_selection();
+            ed.clear_wires();
         }
     });
 }
@@ -769,6 +860,9 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
     let has_sel = !ed.selection.is_empty();
     // Items inside groups are listed with their group, not on their own.
     let inner: std::collections::HashSet<Id> = ed.board.objects.iter().filter_map(|o| if let Kind::Group { members, .. } = &o.kind { Some(members.clone()) } else { None }).flatten().collect();
+    // Groups and sketches opened in the lists, to show what is inside them.
+    let groups_id = ui.id().with("layer-groups-open");
+    let mut groups_open: std::collections::HashSet<Id> = ui.data(|d| d.get_temp(groups_id)).unwrap_or_default();
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (i, l) in layers.iter().enumerate().rev() {
             let active = l.id == ed.active_layer;
@@ -881,17 +975,43 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
             }
             // Its items, when open: click one to go to it, drag one onto another layer.
             if open {
-                let items: Vec<(Id, String, &'static str)> = ed.board.objects.iter().rev().filter(|o| o.layer == l.id && o.page == ed.page && !inner.contains(&o.id)).take(300).map(|o| (o.id, ed.board.name_of(o), o.kind.name())).collect();
+                let top: Vec<Id> = ed.board.objects.iter().rev().filter(|o| o.layer == l.id && o.page == ed.page && !inner.contains(&o.id)).take(300).map(|o| o.id).collect();
+                // A group is one row; opened, its members follow it, indented.
+                let mut items: Vec<(Id, String, String, usize, Option<usize>)> = Vec::new();
+                let mut stack: Vec<(Id, usize)> = top.into_iter().rev().map(|id| (id, 0)).collect();
+                while let Some((id, depth)) = stack.pop() {
+                    let Some(o) = ed.board.get(id) else { continue };
+                    let members = ed.board.members(id);
+                    let kind = if o.is_sketch() { "sketch".to_owned() } else { o.kind.name().to_owned() };
+                    let inside = if o.is_group() { Some(members.len()) } else { None };
+                    items.push((id, ed.board.name_of(o), kind, depth, inside));
+                    if o.is_group() && groups_open.contains(&id) && items.len() < 600 {
+                        stack.extend(members.into_iter().map(|m| (m, depth + 1)));
+                    }
+                }
                 if items.is_empty() {
                     ui.horizontal(|ui| {
                         ui.add_space(38.0);
                         ui.label(theme::secondary(ui, "Nothing on this page"));
                     });
                 }
-                for (id, name, kind) in items {
+                for (id, name, kind, depth, inside) in items {
                     ui.horizontal(|ui| {
-                        ui.add_space(38.0);
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_space(22.0 + depth as f32 * 14.0);
+                        // The arrow that opens a group's list of members.
+                        let (ar, aresp) = ui.allocate_exact_size(vec2(14.0, 20.0), if inside.is_some() { Sense::click() } else { Sense::hover() });
+                        if inside.is_some() {
+                            let m = ar.center();
+                            let open = groups_open.contains(&id);
+                            let pts = if open { vec![m + vec2(-3.5, -1.5), m + vec2(0.0, 2.0), m + vec2(3.5, -1.5)] } else { vec![m + vec2(-1.5, -3.5), m + vec2(2.0, 0.0), m + vec2(-1.5, 3.5)] };
+                            ui.painter().add(egui::Shape::line(pts, Stroke::new(1.3, if aresp.hovered() { p.accent } else { p.text_secondary })));
+                            if aresp.on_hover_text(if open { "Hide what is inside" } else { "Show what is inside" }).clicked() && !groups_open.remove(&id) {
+                                groups_open.insert(id);
+                            }
+                        }
                         let sel = ed.selection.contains(&id);
+                        let kind = match inside { Some(k) => format!("{kind} · {k}"), None => kind };
                         let text = RichText::new(format!("{}   {}", short_label(&name), kind)).size(12.0).color(if sel { p.text } else { p.text_secondary });
                         let resp = ui.add(egui::Button::selectable(sel, text).min_size(vec2(ui.available_width(), 20.0)).sense(Sense::click_and_drag()));
                         resp.dnd_set_drag_payload(LayerItem(id));
@@ -903,6 +1023,7 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     });
+    ui.data_mut(|d| d.insert_temp(groups_id, groups_open));
     ui.data_mut(|d| match &renaming {
         Some(r) => {
             d.insert_temp(rename_id, r.clone());
@@ -950,7 +1071,7 @@ pub fn layers_ui(ui: &mut Ui, ed: &mut Editor) {
             ed.finish_edit();
             let count = sel.len();
             ed.selection = sel;
-            ed.selected_wire = None;
+            ed.clear_wires();
             ed.say(format!("Selected {} on {}", plural(count, "item", "items"), layer_name(ed, id)));
         }
         LayerAction::Drop(item, id) => {
@@ -1355,12 +1476,38 @@ fn note_editor(ui: &mut Ui, ed: &mut Editor, nid: Id, width: f32) {
         ui.data_mut(|d| d.insert_temp(ac_id.with("off"), true));
     }
     let mut changed = false;
+    // Ctrl+V of a picture (a screenshot, or images copied on the board) puts it in at the cursor.
+    let v_id = te_id.with("v-down");
+    let v_down = ui.input(|i| i.modifiers.command) && crate::app::ctrl_v_down();
+    let v_was = ui.data(|d| d.get_temp::<bool>(v_id)).unwrap_or(false);
+    ui.data_mut(|d| d.insert_temp(v_id, v_down));
+    if v_down && !v_was && ui.memory(|m| m.has_focus(te_id)) {
+        if let Some(snippet) = ed.clipboard_pictures() {
+            // Keep the text box from pasting the clipboard's text as well.
+            ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Paste(_))));
+            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id).unwrap_or_default();
+            let len = text.chars().count();
+            let (a, b) = state.cursor.char_range().map(|r| { let (x, y) = (r.primary.index.0.min(len), r.secondary.index.0.min(len)); (x.min(y), x.max(y)) }).unwrap_or((len, len));
+            let chars: Vec<char> = text.chars().collect();
+            // A picture goes on lines of its own.
+            let before: String = chars[..a].iter().collect();
+            let after: String = chars[b..].iter().collect();
+            let lead = if before.is_empty() || before.ends_with("\n\n") { "" } else if before.ends_with('\n') { "\n" } else { "\n\n" };
+            let trail = if after.starts_with('\n') { "\n" } else { "\n\n" };
+            let insert = format!("{lead}{snippet}{trail}");
+            let at = a + insert.chars().count();
+            text = format!("{before}{insert}{after}");
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(at))));
+            state.store(ui.ctx(), te_id);
+            changed = true;
+        }
+    }
     let mut out = None;
     ScrollArea::vertical().id_salt(("note-edit", nid)).auto_shrink([false, false]).show(ui, |ui| {
         let rows = ((ui.available_height() / 19.0) as usize).max(6);
         let te = egui::TextEdit::multiline(&mut text).id(te_id).font(egui::FontId::proportional(14.5)).frame(egui::Frame::NONE).desired_width(width - 8.0).desired_rows(rows).lock_focus(true);
         let o = te.show(ui);
-        changed = o.response.changed();
+        changed |= o.response.changed();
         out = Some(o);
     });
     let Some(out) = out else { return };

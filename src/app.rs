@@ -400,7 +400,7 @@ impl App {
             if i.key_pressed(Key::Escape) && ed.eyedropper.take().is_some() {
                 // Escape only cancels the eyedropper.
             } else if i.key_pressed(Key::Escape) {
-                if ed.selection.is_empty() && ed.selected_wire.is_none() {
+                if ed.selection.is_empty() && ed.wires_selected().is_empty() {
                     ed.tool = Tool::Select;
                 }
                 ed.clear_selection();
@@ -483,7 +483,7 @@ impl App {
                 if ui.button("Zoom to fit").clicked() {
                     self.ed.zoom_to_fit();
                 }
-                if ui.add_enabled(!self.ed.selection.is_empty() || self.ed.selected_wire.is_some(), egui::Button::new("Zoom to the selection")).clicked() {
+                if ui.add_enabled(!self.ed.selection.is_empty() || !self.ed.wires_selected().is_empty(), egui::Button::new("Zoom to the selection")).clicked() {
                     self.ed.zoom_to_selection();
                 }
                 if ui.button("Actual size").clicked() {
@@ -1083,12 +1083,12 @@ impl App {
 
 /// Is the V key physically down? Used to catch Ctrl+V for image-only clipboards.
 #[cfg(windows)]
-fn ctrl_v_down() -> bool {
+pub(crate) fn ctrl_v_down() -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     unsafe { (GetAsyncKeyState(b'V' as i32) as u16 & 0x8000) != 0 }
 }
 
 #[cfg(not(windows))]
-fn ctrl_v_down() -> bool {
+pub(crate) fn ctrl_v_down() -> bool {
     false
 }

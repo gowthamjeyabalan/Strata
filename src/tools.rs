@@ -26,10 +26,11 @@ pub enum Tool {
     Node,
     Text,
     Connect,
+    GridNote,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Select,
         Tool::Hand,
         Tool::Pen,
@@ -46,6 +47,7 @@ impl Tool {
         Tool::Node,
         Tool::Text,
         Tool::Connect,
+        Tool::GridNote,
     ];
 
     pub fn name(self) -> &'static str {
@@ -66,6 +68,7 @@ impl Tool {
             Tool::Node => "Flowchart box",
             Tool::Text => "Text",
             Tool::Connect => "Connect",
+            Tool::GridNote => "Grid note",
         }
     }
 
@@ -88,6 +91,7 @@ impl Tool {
             Tool::Node => N,
             Tool::Text => T,
             Tool::Connect => C,
+            Tool::GridNote => G,
         }
     }
 
@@ -175,6 +179,16 @@ pub fn paint_icon(p: &Painter, rect: Rect, tool: Tool, c: Color32, dot: Color32)
         }
         Tool::Rectangle => {
             p.rect_stroke(Rect::from_min_max(at(3.5, 5.0), at(16.5, 15.0)), 1.5 * s, st, egui::StrokeKind::Middle);
+        }
+        Tool::GridNote => {
+            // Dots, with a line joining two of them.
+            for x in [5.0, 10.0, 15.0] {
+                for y in [5.0, 10.0, 15.0] {
+                    p.circle_filled(at(x, y), 1.1 * s, c);
+                }
+            }
+            line(&[(5.0, 15.0), (15.0, 5.0)]);
+            p.circle_filled(at(15.0, 5.0), 1.6 * s, dot);
         }
         Tool::Ellipse => {
             let pts: Vec<Pos2> = (0..32)

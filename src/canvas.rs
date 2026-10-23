@@ -151,6 +151,11 @@ pub enum Drag {
     Radius { id: Id },
     /// Turning an item about its centre by its handle.
     Rotate { id: Id, center: Pos2, start: f32, orig: f32 },
+    /// Scaling several selected items together by the handles of the box around them. `items` holds
+    /// every item moved (with what is inside groups) and its rect and text size at the start.
+    Scale { orig: Rect, handle: Handle, items: Vec<(Id, Rect, f32)> },
+    /// Drawing a line on a grid note from dot `from` towards `end`.
+    GridLine { grid: Id, from: [i32; 2], end: Pos2 },
     /// Cropping an image: `full` is the whole picture in world space.
     Crop { id: Id, orig: Rect, handle: Handle, full: Rect },
     Marquee { start: Pos2, end: Pos2, add: bool },
@@ -247,7 +252,7 @@ impl Editor {
 
     /// Can this item be turned? Not groups, frames or locked items.
     fn rotatable(&self, o: &Object) -> bool {
-        !self.is_locked(o.id) && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. })
+        !self.is_locked(o.id) && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. })
     }
 
     /// The round handle above a single selected item that turns it.
@@ -334,6 +339,31 @@ impl Editor {
     }
 
     /// A resize handle under a world point (only for a single selected item).
+    /// The box around a selection of several items, which its handles scale.
+    fn selection_box(&self) -> Option<Rect> {
+        if self.selection.len() < 2 || self.is_editing() || self.selection.iter().any(|id| self.is_locked(*id)) {
+            return None;
+        }
+        self.selection.iter().filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b))
+    }
+
+    /// The handles of that box, in screen space.
+    fn selection_handles(&self) -> Option<(Rect, [(Handle, Pos2); 8])> {
+        let b = self.selection_box()?;
+        let r = self.camera.rect_to_screen(self.canvas_rect.min, b).expand(8.0);
+        let c = r.center();
+        Some((b, [
+            (Handle::NW, r.left_top()),
+            (Handle::N, pos2(c.x, r.top())),
+            (Handle::NE, r.right_top()),
+            (Handle::E, pos2(r.right(), c.y)),
+            (Handle::SE, r.right_bottom()),
+            (Handle::S, pos2(c.x, r.bottom())),
+            (Handle::SW, r.left_bottom()),
+            (Handle::W, pos2(r.left(), c.y)),
+        ]))
+    }
+
     fn resize_handle_hit(&self, w: Pos2) -> Option<(Id, Handle)> {
         if self.selection.len() != 1 || self.is_editing() {
             return None;
@@ -419,8 +449,22 @@ impl Editor {
         let tol = 8.0 / self.camera.zoom;
         let hidden = self.board.hidden_set();
         let ids: Vec<Id> = self.board.objects.iter().filter(|o| matches!(o.kind, Kind::Path { .. }) && !o.locked && !self.board.layer_of(o).is_some_and(|l| l.locked) && !hidden.contains(&o.id) && o.hit(w, tol)).map(|o| o.id).collect();
+        // Lines on grid notes under the eraser.
+        let mut lines_gone = false;
+        let grids: Vec<Id> = self.board.objects.iter().filter(|o| matches!(o.kind, Kind::Grid { .. }) && !hidden.contains(&o.id) && o.rect().expand(tol).contains(w)).map(|o| o.id).filter(|id| !self.is_locked(*id)).collect();
+        for g in grids {
+            let Some(o) = self.board.get(g) else { continue };
+            let Kind::Grid { lines, .. } = &o.kind else { continue };
+            let keep: Vec<board::GridLine> = lines.iter().copied().filter(|l| board::dist_to_segment(w, o.grid_dot(l.a), o.grid_dot(l.b)) > tol + l.width * 0.5).collect();
+            if keep.len() != lines.len() {
+                lines_gone = true;
+                if let Some(Kind::Grid { lines, .. }) = self.board.get_mut(g).map(|o| &mut o.kind) {
+                    *lines = keep;
+                }
+            }
+        }
         if ids.is_empty() {
-            return false;
+            return lines_gone;
         }
         self.board.remove(&ids);
         self.selection.retain(|id| !ids.contains(id));
@@ -461,10 +505,31 @@ impl Editor {
         }
         self.say(format!("Made a grid of {} × {}", cols, rows));
         self.selection = made;
-        self.selected_wire = None;
+        self.clear_wires();
     }
 
     /// A new frame, named and numbered after the page's last one, behind everything.
+    /// A grid note filling `rect`.
+    fn create_grid_note(&mut self, rect: Rect) {
+        self.mark_changed();
+        let id = self.board.add(rect, Kind::Grid { spacing: GRID_SPACING, lines: Vec::new() }, Style::default());
+        if let Some(o) = self.board.get_mut(id) {
+            o.label = "Grid".to_owned();
+        }
+        self.selection = vec![id];
+        self.clear_wires();
+        self.say("Drag from dot to dot to draw lines on it");
+    }
+
+    /// The grid note whose dot is under `w` (the topmost), and that dot.
+    fn grid_dot_hit(&self, w: Pos2) -> Option<(Id, [i32; 2])> {
+        let hidden = self.board.hidden_set();
+        self.board.objects.iter().rev().filter(|o| matches!(o.kind, Kind::Grid { .. }) && !hidden.contains(&o.id) && !self.is_locked(o.id)).find_map(|o| {
+            let Kind::Grid { spacing, .. } = o.kind else { return None };
+            o.grid_dot_at(w, spacing * 0.35).map(|d| (o.id, d))
+        })
+    }
+
     pub fn create_frame(&mut self, rect: Rect) {
         self.mark_changed();
         let page = self.page;
@@ -474,7 +539,7 @@ impl Editor {
             o.label = format!("Frame {slide}");
         }
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
     }
 
     fn create_box(&mut self, rect: Rect) {
@@ -491,7 +556,7 @@ impl Editor {
         };
         let id = self.board.add(rect, kind, style);
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
         if edit {
             self.start_edit(id);
         }
@@ -549,7 +614,7 @@ impl Editor {
         let kind = Kind::Path { points: local, base: [b.width(), b.height()], arrow: false, brush: Brush::Pen, closed, curved: self.poly_curved };
         let id = self.board.add(b, kind, self.style);
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
     }
 
     /// Start cropping an image: its handles crop instead of resize.
@@ -563,7 +628,7 @@ impl Editor {
         }
         self.finish_edit();
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
         self.cropping = Some(id);
         self.say("Drag the handles to crop. Enter, Esc or a click elsewhere when done.");
     }
@@ -620,6 +685,10 @@ impl Editor {
                     let center = self.board.get(id).map(|o| o.rect().center()).unwrap_or(w);
                     let orig = self.board.get(id).map(|o| o.rotation).unwrap_or(0.0);
                     Drag::Rotate { id, center, start: (w - center).angle(), orig }
+                } else if let Some((b, h)) = self.selection_handles().and_then(|(b, hs)| hs.into_iter().find(|(_, q)| (*q - s).abs().max_elem() <= HANDLE_PX * 0.5 + 2.0).map(|(h, _)| (b, h))) {
+                    let ids = self.board.with_descendants(&self.selection);
+                    let items = ids.iter().filter_map(|id| self.board.get(*id)).map(|o| (o.id, o.rect(), o.style.font_size)).collect();
+                    Drag::Scale { orig: b, handle: h, items }
                 } else if let Some(id) = self.radius_handle_hit(w) {
                     Drag::Radius { id }
                 } else if let Some((id, handle)) = self.resize_handle_hit(w) {
@@ -637,7 +706,7 @@ impl Editor {
                             self.selection = vec![id];
                         }
                     }
-                    self.selected_wire = None;
+                    self.clear_wires();
                     // Ctrl+drag drags a copy, which is connected to its original when dropped.
                     let copies = if mods.command { self.copy_in_place() } else { Vec::new() };
                     // Moving a group moves everything in it. Locked items stay where they are.
@@ -660,6 +729,8 @@ impl Editor {
                     let bbox = unlocked.iter().filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b)).unwrap_or(Rect::NOTHING);
                     let exclude = self.snap_exclude(&unlocked);
                     Drag::Move { start: w, orig, moved: false, bbox, exclude, copies }
+                } else if let Some((grid, from)) = self.grid_dot_hit(w) {
+                    Drag::GridLine { grid, from, end: w }
                 } else {
                     if !mods.shift {
                         self.clear_selection();
@@ -672,6 +743,10 @@ impl Editor {
             Tool::Eraser => Drag::Erase { erased: self.erase_at(w) },
             Tool::Line | Tool::Arrow => Drag::Segment { start: w, end: w, arrow: self.tool == Tool::Arrow },
             Tool::Polyline => Drag::None,
+            Tool::GridNote => match self.grid_dot_hit(w) {
+                Some((grid, from)) => Drag::GridLine { grid, from, end: w },
+                None => Drag::Box { start: w, end: w, cols: 1, rows: 1 },
+            },
             Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text | Tool::Frame => Drag::Box { start: w, end: w, cols: 1, rows: 1 },
             Tool::Connect => match self.port_hit(w, None) {
                 Some((id, side)) => Drag::Wire { from: id, from_side: Some(side), end: w },
@@ -766,6 +841,34 @@ impl Editor {
                     o.set_rect(r);
                 }
             }
+            Drag::Scale { orig, handle, items } => {
+                let o0 = *orig;
+                let mut r = handle.apply(o0, w, 4.0 / zoom);
+                // Corner handles keep the proportions (Shift frees them).
+                if handle.is_corner() && !mods.shift {
+                    let k = (r.width() / o0.width().max(1e-3)).max(r.height() / o0.height().max(1e-3));
+                    let s = o0.size() * k;
+                    r = match handle {
+                        Handle::NW => Rect::from_min_max(o0.max - s, o0.max),
+                        Handle::NE => Rect::from_min_size(pos2(o0.min.x, o0.max.y - s.y), s),
+                        Handle::SW => Rect::from_min_size(pos2(o0.max.x - s.x, o0.min.y), s),
+                        _ => Rect::from_min_size(o0.min, s),
+                    };
+                }
+                let (sx, sy) = (r.width() / o0.width().max(1e-3), r.height() / o0.height().max(1e-3));
+                let map = |q: Pos2| pos2(r.min.x + (q.x - o0.min.x) * sx, r.min.y + (q.y - o0.min.y) * sy);
+                // Text grows with the items, by the smaller of the two stretches.
+                let font_k = sx.min(sy);
+                let items = items.clone();
+                for (id, rect, font) in items {
+                    if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == id) {
+                        o.set_rect(Rect::from_min_max(map(rect.min), map(rect.max)));
+                        if matches!(o.kind, Kind::Text | Kind::Shape { .. }) {
+                            o.style.font_size = (font * font_k).clamp(2.0, 2000.0);
+                        }
+                    }
+                }
+            }
             Drag::Rotate { id, center, start, orig } => {
                 let mut a = *orig + ((w - *center).angle() - *start);
                 if mods.shift {
@@ -847,6 +950,7 @@ impl Editor {
             Drag::Segment { start, end, .. } => *end = if mods.shift { snap45(*start, w) } else { w },
             Drag::Box { end, .. } => *end = w,
             Drag::Wire { end, .. } => *end = w,
+            Drag::GridLine { end, .. } => *end = w,
             Drag::Erase { .. } => erase = true,
         }
         if erase {
@@ -879,7 +983,7 @@ impl Editor {
                     self.say(format!("Copied and connected {}", crate::editor::plural(joined, "item", "items")));
                 }
             }
-            Drag::Resize { .. } | Drag::Radius { .. } | Drag::Rotate { .. } | Drag::Crop { .. } => self.mark_changed(),
+            Drag::Resize { .. } | Drag::Radius { .. } | Drag::Rotate { .. } | Drag::Crop { .. } | Drag::Scale { .. } => self.mark_changed(),
             Drag::Marquee { start, end, add } => {
                 let r = Rect::from_two_pos(start, end);
                 let hidden = self.board.hidden_set();
@@ -895,12 +999,29 @@ impl Editor {
                     .filter(|o| if window { r.contains_rect(o.rect()) } else { r.intersects(o.rect().expand(0.5)) })
                     .map(|o| o.id)
                     .collect();
+                // Connections too: a window takes those wholly inside it, a crossing box those it touches.
+                let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+                let touches = |a: Pos2, b: Pos2| r.contains(a) || r.contains(b) || (0..4).any(|k| board::segments_cross(a, b, corners[k], corners[(k + 1) % 4]));
+                let wires: Vec<Id> = self
+                    .board
+                    .wires
+                    .iter()
+                    .filter(|x| !hidden.contains(&x.from) && !hidden.contains(&x.to))
+                    .filter(|x| self.board.wire_points(x).is_some_and(|pts| if window { pts.iter().all(|q| r.contains(*q)) } else { pts.windows(2).any(|s| touches(s[0], s[1])) }))
+                    .map(|x| x.id)
+                    .collect();
                 if !add {
                     self.selection.clear();
+                    self.clear_wires();
                 }
                 for id in hits {
                     if !self.selection.contains(&id) {
                         self.selection.push(id);
+                    }
+                }
+                for id in wires {
+                    if self.selected_wire != Some(id) && !self.marked_wires.contains(&id) {
+                        self.marked_wires.push(id);
                     }
                 }
             }
@@ -918,6 +1039,8 @@ impl Editor {
                     self.create_grid(r, cols, rows);
                 } else if self.tool == Tool::Frame {
                     self.create_frame(r);
+                } else if self.tool == Tool::GridNote {
+                    self.create_grid_note(r);
                 } else if self.tool == Tool::Text {
                     let h = self.style.font_size * 1.4;
                     self.create_box(Rect::from_min_size(r.min, vec2(r.width().max(40.0), h)));
@@ -932,6 +1055,7 @@ impl Editor {
                         Some(wid) => {
                             self.mark_changed();
                             self.selection.clear();
+                            self.clear_wires();
                             self.selected_wire = Some(wid);
                             self.say(format!("Connected {} to {}", self.board.display_name(from), self.board.display_name(to)));
                         }
@@ -946,6 +1070,27 @@ impl Editor {
             Drag::Erase { erased } => {
                 if erased {
                     self.mark_changed();
+                }
+            }
+            Drag::GridLine { grid, from, end } => {
+                let reach = if let Some(Kind::Grid { spacing, .. }) = self.board.get(grid).map(|o| &o.kind) { *spacing * 0.5 } else { 0.0 };
+                let to = self.board.get(grid).and_then(|o| o.grid_dot_at(end, reach));
+                match to {
+                    Some(to) if to != from => {
+                        self.mark_changed();
+                        let line = board::GridLine { a: from, b: to, ink: self.style.ink, width: self.style.width.clamp(0.5, 40.0) };
+                        if let Some(Kind::Grid { lines, .. }) = self.board.get_mut(grid).map(|o| &mut o.kind) {
+                            if !lines.iter().any(|l| (l.a == line.a && l.b == line.b) || (l.a == line.b && l.b == line.a)) {
+                                lines.push(line);
+                            }
+                        }
+                    }
+                    // A click on a dot selects the grid note.
+                    _ if end.distance(self.board.get(grid).map(|o| o.grid_dot(from)).unwrap_or(end)) * zoom < 4.0 => {
+                        self.selection = vec![grid];
+                        self.clear_wires();
+                    }
+                    _ => {}
                 }
             }
         }
@@ -980,10 +1125,23 @@ impl Editor {
                     } else {
                         self.selection = vec![id];
                     }
-                    self.selected_wire = None;
+                    self.clear_wires();
                 } else if let Some(wire) = self.wire_hit(w) {
-                    self.selection.clear();
-                    self.selected_wire = Some(wire);
+                    // Shift adds the connection to what is selected (or takes it out).
+                    if mods.shift {
+                        if let Some(old) = self.selected_wire.take() {
+                            self.marked_wires.push(old);
+                        }
+                        if self.marked_wires.contains(&wire) {
+                            self.marked_wires.retain(|x| *x != wire);
+                        } else {
+                            self.selected_wire = Some(wire);
+                        }
+                    } else {
+                        self.selection.clear();
+                        self.clear_wires();
+                        self.selected_wire = Some(wire);
+                    }
                 } else {
                     self.clear_selection();
                 }
@@ -1012,6 +1170,7 @@ impl Editor {
             }
             // A click makes a 16:9 slide-sized frame.
             Tool::Frame => self.create_frame(Rect::from_center_size(w, vec2(960.0, 540.0))),
+            Tool::GridNote => self.create_grid_note(Rect::from_center_size(w, vec2(GRID_SPACING * 16.0, GRID_SPACING * 12.0))),
             Tool::Polyline => self.poly_click(w, mods),
             Tool::Hand | Tool::Line | Tool::Arrow => {}
         }
@@ -1119,7 +1278,7 @@ impl Editor {
                     if !self.selection.contains(&id) {
                         self.selection = vec![id];
                     }
-                    self.selected_wire = None;
+                    self.clear_wires();
                     self.radial = Some(crate::radial::Radial::new(s, w, true));
                 } else {
                     if self.radial_empty {
@@ -1271,6 +1430,11 @@ impl Editor {
                     Tool::Select if self.radius_handle_hit(w).is_some() || matches!(self.drag, Drag::Radius { .. }) => CursorIcon::ResizeHorizontal,
                     Tool::Select if matches!(self.drag, Drag::Rotate { .. }) || self.rotate_handle().is_some_and(|(_, h)| h.distance(self.camera.to_screen(self.canvas_rect.min, w)) <= 9.0) => CursorIcon::Grab,
                     Tool::Select if self.resize_handle_hit(w).is_some() => self.resize_handle_hit(w).map(|(_, h)| h.cursor()).unwrap_or_default(),
+                    Tool::Select if matches!(self.drag, Drag::Scale { .. }) => if let Drag::Scale { handle, .. } = &self.drag { handle.cursor() } else { CursorIcon::Default },
+                    Tool::Select if self.selection_handles().is_some_and(|(_, hs)| { let s = self.camera.to_screen(self.canvas_rect.min, w); hs.iter().any(|(_, q)| (*q - s).abs().max_elem() <= HANDLE_PX * 0.5 + 2.0) }) => {
+                        let s = self.camera.to_screen(self.canvas_rect.min, w);
+                        self.selection_handles().and_then(|(_, hs)| hs.into_iter().find(|(_, q)| (*q - s).abs().max_elem() <= HANDLE_PX * 0.5 + 2.0)).map(|(h, _)| h.cursor()).unwrap_or_default()
+                    }
                     Tool::Select if self.port_hit(w, None).is_some() => CursorIcon::Crosshair,
                     Tool::Select if matches!(self.drag, Drag::Move { .. }) => CursorIcon::Move,
                     Tool::Select => CursorIcon::Default,
@@ -1445,7 +1609,7 @@ impl Editor {
                 continue;
             }
             // A turned item is drawn as usual, then turned (paths turn their own points).
-            let turned = o.rotation.abs() > 1e-4 && !matches!(o.kind, Kind::Path { .. } | Kind::Group { .. } | Kind::Frame { .. });
+            let turned = o.rotation.abs() > 1e-4 && !matches!(o.kind, Kind::Path { .. } | Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. });
             let h = if turned { self.draw_rotated(ctx, painter, origin, o, p, tex, self.editing == Some(id)) } else { self.draw_object(painter, origin, o, p, tex, self.editing == Some(id)) };
             if let Some(h) = h {
                 text_heights.push((id, h));
@@ -1619,22 +1783,25 @@ impl Editor {
             if !view.intersects(Rect::from_points(&pts)) {
                 continue;
             }
-            let selected = self.selected_wire == Some(w.id);
+            let selected = self.selected_wire == Some(w.id) || self.marked_wires.contains(&w.id);
             let on = selected || self.selection.contains(&w.from) || self.selection.contains(&w.to);
             let color = if on { p.accent } else { w.color.map(|c| c.color(p)).unwrap_or(p.text_secondary) };
             let s = thin(pts.iter().map(|q| self.camera.to_screen(origin, *q)), 1.5);
             let end = s[s.len() - 1];
-            painter.add(egui::Shape::line(s, Stroke::new(if selected { width + 1.0 } else { width }, color)));
+            let lw = width * w.weight();
+            crate::shapes::stroke_line(painter, &s, false, Stroke::new(if selected { lw + 1.0 } else { lw }, color), w.dash);
             // The arrow stops at the port's edge so the port stays visible.
             let n = look.get(&self.board, look.proxy(w.to)).map(|o| o.port_normal(w.to_side)).unwrap_or(w.to_side.normal());
             let size = (7.0 * z.sqrt()).clamp(5.0, 10.0);
-            arrow_tip(painter, end + n * (port_px(z) + 1.0), -n, size, color);
+            arrow_tip(painter, end + n * (port_px(z) + 1.0), -n, size * w.weight().sqrt(), color);
             if !w.label.is_empty() && self.editing_wire != Some(w.id) {
-                let mid = self.camera.to_screen(origin, board::midpoint(&pts));
-                let g = painter.layout_no_wrap(w.label.clone(), FontId::proportional(wire_font(z)), if on { p.accent_text } else { p.text });
+                let mid = self.camera.to_screen(origin, board::point_along(&pts, w.label_at));
+                let g = painter.layout_no_wrap(w.label.clone(), FontId::proportional(wire_font(z) * w.label_size()), if on { p.accent_text } else { p.text });
                 let r = Rect::from_center_size(mid, g.size() + vec2(12.0, 6.0));
-                painter.rect(r, CornerRadius::same(7), p.canvas, Stroke::new(1.0, if on { p.accent } else { p.hairline }), StrokeKind::Inside);
-                painter.galley(r.center() - g.size() * 0.5, g, p.text);
+                if !w.label_plain {
+                    painter.rect(r, CornerRadius::same(7), p.canvas, Stroke::new(1.0, if on { p.accent } else { p.hairline }), StrokeKind::Inside);
+                }
+                painter.galley(r.center() - g.size() * 0.5, g, if w.label_plain && on { p.accent } else { p.text });
             }
         }
     }
@@ -1692,10 +1859,11 @@ impl Editor {
                 if !editing && !o.label.is_empty() && font.size >= 2.0 {
                     let k = font.size / (o.style.font_size * z).max(0.01);
                     let wrap = ((r.width() - 16.0 * z) * k).max(8.0);
-                    let mut job = egui::text::LayoutJob::simple(o.label.clone(), font, text, wrap);
-                    job.halign = Align::Center;
+                    let text = o.style.text_ink.map(|c| fade(c.color(p))).unwrap_or(text);
+                    let job = text_job(&o.label, font.size, text, wrap, &o.style, Align::Center);
+                    let x = anchor_x(r.shrink2(vec2(8.0 * z, 0.0)), job.halign);
                     let g = painter.layout_job(job);
-                    painter.galley(pos2(r.center().x, r.center().y - g.size().y * 0.5), g, text);
+                    painter.galley(pos2(x, r.center().y - g.size().y * 0.5), g, text);
                 }
             }
             Kind::Frame { .. } => {
@@ -1706,6 +1874,50 @@ impl Editor {
                     _ => fade(p.bg_elevated.gamma_multiply(0.55)),
                 };
                 painter.rect(r, CornerRadius::same((6.0 * z).clamp(1.0, 12.0) as u8), fill, Stroke::new(1.0, if self.presenting.is_some() { Color32::TRANSPARENT } else { fade(p.hairline) }), StrokeKind::Inside);
+                if self.presenting.is_none() && !editing && !o.label.is_empty() {
+                    let color = if self.selection.contains(&o.id) { p.accent } else { p.text_secondary };
+                    painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, &o.label, FontId::proportional(12.0), color);
+                }
+            }
+            Kind::Grid { lines, .. } => {
+                // A slightly white, see-through panel with a dotted, rounded edge, its dots, and the lines
+                // drawn on it.
+                let fill = match o.style.fill_color {
+                    Some(c) if o.style.fill => fade(c.color(p)),
+                    _ => fade(Color32::from_white_alpha(if p.canvas.r() < 128 { 16 } else { 150 })),
+                };
+                let radius = (r.width().min(r.height()) * 0.08).min(28.0 * z);
+                painter.rect_filled(r, CornerRadius::same(radius.min(255.0) as u8), fill);
+                let edge = if self.selection.contains(&o.id) { p.accent } else { fade(p.text_secondary.gamma_multiply(0.7)) };
+                shapes::stroke_line(painter, &rounded_outline(r, radius), true, Stroke::new(1.2, edge), board::Dash::Dotted);
+                let (cols, rows) = o.grid_size();
+                let step = if let Kind::Grid { spacing, .. } = o.kind { spacing * z } else { 0.0 };
+                // The dots, small on screen whatever the zoom (as the board's are), left out when too dense.
+                if step >= 5.0 {
+                    let dr = (1.0 * z.sqrt()).clamp(0.7, 1.5);
+                    let dot = fade(p.text_secondary.gamma_multiply(0.75));
+                    let view = painter.clip_rect();
+                    let mut mesh = egui::Mesh::default();
+                    for i in 1..=cols {
+                        for j in 1..=rows {
+                            let s = self.camera.to_screen(origin, o.grid_dot([i, j]));
+                            if view.contains(s) {
+                                mesh.add_colored_rect(Rect::from_center_size(s, vec2(dr * 2.0, dr * 2.0)), dot);
+                            }
+                        }
+                    }
+                    painter.add(egui::Shape::mesh(mesh));
+                }
+                let inside = |d: [i32; 2]| (1..=cols).contains(&d[0]) && (1..=rows).contains(&d[1]);
+                for l in lines.iter().filter(|l| inside(l.a) && inside(l.b)) {
+                    let c = fade(self.board.ink_of(o).color(p));
+                    let c = if l.ink == board::Ink::Auto { c } else { fade(l.ink.color(p)) };
+                    let (a, b) = (self.camera.to_screen(origin, o.grid_dot(l.a)), self.camera.to_screen(origin, o.grid_dot(l.b)));
+                    let w = (l.width * z).max(0.75);
+                    painter.line_segment([a, b], Stroke::new(w, c));
+                    painter.circle_filled(a, w * 0.5, c);
+                    painter.circle_filled(b, w * 0.5, c);
+                }
                 if self.presenting.is_none() && !editing && !o.label.is_empty() {
                     let color = if self.selection.contains(&o.id) { p.accent } else { p.text_secondary };
                     painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, &o.label, FontId::proportional(12.0), color);
@@ -1755,9 +1967,11 @@ impl Editor {
                 // The font size is rounded to half pixels; the wrap width is scaled the same way so the
                 // line breaks do not jump as the board zooms.
                 let k = font.size / (o.style.font_size * z).max(0.01);
-                let g = painter.layout(o.label.clone(), font, ink, (r.width() * k).max(8.0));
+                let job = text_job(&o.label, font.size, ink, (r.width() * k).max(8.0), &o.style, Align::LEFT);
+                let x = anchor_x(r, job.halign);
+                let g = painter.layout_job(job);
                 let h = g.size().y / (z * k).max(1e-4);
-                painter.galley(r.min, g, ink);
+                painter.galley(pos2(x, r.min.y), g, ink);
                 if (h - o.rect[3]).abs() > 0.5 && h > 0.0 {
                     return Some(h);
                 }
@@ -1885,6 +2099,15 @@ impl Editor {
                 }
             }
         }
+        // Several items: a dashed box around them all, with handles that scale them together.
+        if let Some((b, hs)) = self.selection_handles() {
+            let r = self.camera.rect_to_screen(origin, b).expand(8.0);
+            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            painter.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, p.accent), 5.0, 4.0));
+            for (_, c) in hs {
+                painter.rect(Rect::from_center_size(c, vec2(HANDLE_PX, HANDLE_PX)), 2.0, Color32::WHITE, Stroke::new(1.0, p.accent), StrokeKind::Middle);
+            }
+        }
         if self.selection.len() == 1 && !self.is_editing() {
             if let Some(o) = self.board.get(self.selection[0]).filter(|o| Self::resizable(o)) {
                 for (_, c) in self.handles(o) {
@@ -1966,6 +2189,21 @@ impl Editor {
                     arrow_head(painter, b, (b - a).normalized(), (8.0 + self.style.width * 2.5) * z, stroke);
                 }
             }
+            Drag::GridLine { grid, from, end } => {
+                if let Some(o) = self.board.get(*grid) {
+                    let reach = if let Kind::Grid { spacing, .. } = o.kind { spacing * 0.5 } else { 0.0 };
+                    let a = to_s(o.grid_dot(*from));
+                    let snapped = o.grid_dot_at(*end, reach).map(|d| o.grid_dot(d));
+                    let b = to_s(snapped.unwrap_or(*end));
+                    let c = if self.style.ink == board::Ink::Auto { self.board.ink_of(o).color(p) } else { self.style.ink.color(p) };
+                    let w = (self.style.width.clamp(0.5, 40.0) * z).max(0.75);
+                    painter.line_segment([a, b], Stroke::new(w, if snapped.is_some() { c } else { c.gamma_multiply(0.5) }));
+                    painter.circle_stroke(a, 4.0, Stroke::new(1.5, p.accent));
+                    if snapped.is_some() {
+                        painter.circle_stroke(b, 4.0, Stroke::new(1.5, p.accent));
+                    }
+                }
+            }
             Drag::Box { start, end, cols, rows } => {
                 let mods = painter.ctx().input(|i| i.modifiers);
                 let wr = if self.tool == Tool::Frame { frame_rect(*start, *end, mods.shift) } else { box_rect(*start, *end, mods.shift) };
@@ -2014,8 +2252,8 @@ impl Editor {
                 self.editing_wire = None;
                 return;
             };
-            let mid = self.camera.to_screen(origin, self.board.wire_points(w).map(|pts| board::midpoint(&pts)).unwrap_or_default());
-            let font = FontId::proportional(wire_font(z));
+            let mid = self.camera.to_screen(origin, self.board.wire_points(w).map(|pts| board::point_along(&pts, w.label_at)).unwrap_or_default());
+            let font = FontId::proportional(wire_font(z) * w.label_size());
             let area = Rect::from_center_size(mid, vec2(160.0, font.size * 1.4));
             (("wire", wid), area, font, p.text, true, w.label.clone())
         } else if let Some(id) = self.editing {
@@ -2029,7 +2267,7 @@ impl Editor {
             let (area, font, color, center) = match &o.kind {
                 Kind::Text => (Rect::from_min_size(r.min, vec2(r.width().max(40.0), r.height().max(20.0))), FontId::proportional(size), ink, false),
                 Kind::Shape { .. } => (r.shrink2(vec2(8.0 * z, 4.0 * z)), FontId::proportional(size), p.text, true),
-                Kind::Frame { .. } => (Rect::from_min_size(r.left_top() - vec2(0.0, 22.0), vec2(r.width().clamp(120.0, 320.0), 18.0)), FontId::proportional(12.0), p.text, false),
+                Kind::Frame { .. } | Kind::Grid { .. } => (Rect::from_min_size(r.left_top() - vec2(0.0, 22.0), vec2(r.width().clamp(120.0, 320.0), 18.0)), FontId::proportional(12.0), p.text, false),
                 Kind::Group { sketch: false, .. } => {
                     let size = quantize_font(board::group_font(o.rect().width()) * z);
                     let pos = group_name_pos(r, z, size);
@@ -2043,6 +2281,39 @@ impl Editor {
         };
 
         let edit_id = ui.make_persistent_id(key);
+        // Text boxes and shapes' text have a formatting bar while they are typed.
+        let fmt = self.editing.filter(|_| self.editing_wire.is_none()).and_then(|id| self.board.get(id)).filter(|o| matches!(o.kind, Kind::Text | Kind::Shape { .. })).map(|o| (o.style, matches!(o.kind, Kind::Text)));
+        let mut bar_rect = Rect::NOTHING;
+        let mut color = color;
+        if let Some((style, is_text)) = fmt {
+            let mut st = style;
+            bar_rect = text_bar(ui, area, self.canvas_rect, &mut st, is_text, p);
+            // Ctrl+B, Ctrl+I and Ctrl+U as in any editor.
+            ui.input_mut(|i| {
+                if i.consume_key(Modifiers::COMMAND, Key::B) {
+                    st.bold = !st.bold;
+                }
+                if i.consume_key(Modifiers::COMMAND, Key::I) {
+                    st.italic = !st.italic;
+                }
+                if i.consume_key(Modifiers::COMMAND, Key::U) {
+                    st.underline = !st.underline;
+                }
+            });
+            if st != style {
+                self.mark_changed();
+                if let Some(o) = self.editing.and_then(|id| self.board.get_mut(id)) {
+                    o.style = st;
+                }
+            }
+            if !is_text {
+                if let Some(c) = st.text_ink {
+                    color = c.color(p);
+                }
+            } else {
+                color = st.ink.color(p);
+            }
+        }
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
         if center && self.editing.is_some() {
             // Vertically centre the text in shapes.
@@ -2053,16 +2324,27 @@ impl Editor {
         if self.editing_wire.is_some() {
             child.painter().rect(area.expand2(vec2(6.0, 3.0)), CornerRadius::same(7), p.canvas, Stroke::new(1.0, p.accent), StrokeKind::Inside);
         }
+        let style = fmt.map(|(s, _)| s).unwrap_or_default();
+        let align = style.align.map(|a| a.egui()).unwrap_or(if center { Align::Center } else { Align::LEFT });
+        let size = font.size;
+        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+            let mut job = text_job(buf.as_str(), size, color, wrap, &style, align);
+            job.keep_trailing_whitespace = true;
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
         let mut te = egui::TextEdit::multiline(&mut label).id(edit_id).frame(egui::Frame::NONE).font(font).text_color(color).desired_width(area.width()).desired_rows(1).margin(egui::Margin::ZERO);
-        if center {
-            te = te.horizontal_align(Align::Center);
+        if center || fmt.is_some() {
+            te = te.horizontal_align(align);
+        }
+        if fmt.is_some() {
+            te = te.layouter(&mut layouter);
         }
         let out = child.add(te);
         if self.edit_focus {
             out.request_focus();
             self.edit_focus = false;
         }
-        self.edit_rect = Some(area.union(out.rect));
+        self.edit_rect = Some(area.union(out.rect).union(bar_rect));
         if let Some(wid) = self.editing_wire {
             if let Some(w) = self.board.wire_mut(wid) {
                 w.label = label.replace('\n', " ");
@@ -2081,10 +2363,131 @@ impl Editor {
             }
         }
         let escape = ui.input(|i| i.key_pressed(Key::Escape));
-        if out.lost_focus() || escape {
+        // A click on the formatting bar keeps the text being typed.
+        let on_bar = ui.input(|i| i.pointer.interact_pos().is_some_and(|q| bar_rect.expand(4.0).contains(q)));
+        if out.lost_focus() && on_bar && !escape {
+            out.request_focus();
+        } else if out.lost_focus() || escape {
             self.finish_edit();
         }
     }
+}
+
+/// An item's text laid out with its formatting: weight, slant, underline and alignment (`align`
+/// unless the item has its own).
+fn text_job(text: &str, size: f32, color: Color32, wrap: f32, s: &Style, align: Align) -> egui::text::LayoutJob {
+    let family = if s.bold { theme::semibold_family() } else { egui::FontFamily::Proportional };
+    let format = egui::TextFormat {
+        font_id: FontId::new(size, family),
+        color,
+        italics: s.italic,
+        underline: if s.underline { Stroke::new((size / 15.0).max(1.0), color) } else { Stroke::NONE },
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
+    job.wrap.max_width = wrap;
+    job.halign = s.align.map(|a| a.egui()).unwrap_or(align);
+    job
+}
+
+/// Where a galley laid out with `align` is placed to sit in `r`.
+fn anchor_x(r: Rect, align: Align) -> f32 {
+    match align {
+        Align::Min => r.left(),
+        Align::Center => r.center().x,
+        Align::Max => r.right(),
+    }
+}
+
+/// The formatting bar over the text being typed: bold, italic, underline, size, colour and alignment.
+/// Changes go into `st`. Returns the screen space it took (with its colour menu, when open).
+fn text_bar(ui: &mut Ui, area: Rect, canvas: Rect, st: &mut Style, is_text: bool, p: &Pal) -> Rect {
+    let above = area.top() - 46.0;
+    let at = if above > canvas.top() + 4.0 { pos2(area.left(), above) } else { pos2(area.left(), area.bottom() + 10.0) };
+    let mut taken = Rect::NOTHING;
+    let resp = egui::Area::new(ui.id().with("text-bar")).order(egui::Order::Foreground).fixed_pos(at).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let toggle = |ui: &mut Ui, on: &mut bool, text: egui::RichText, tip: &str| {
+                    if ui.add(egui::Button::selectable(*on, text).min_size(vec2(26.0, 24.0))).on_hover_text(tip).clicked() {
+                        *on = !*on;
+                    }
+                };
+                toggle(ui, &mut st.bold, egui::RichText::new("B").family(theme::semibold_family()).size(14.0), "Bold (Ctrl+B)");
+                toggle(ui, &mut st.italic, egui::RichText::new("I").italics().size(14.0), "Italic (Ctrl+I)");
+                toggle(ui, &mut st.underline, egui::RichText::new("U").underline().size(14.0), "Underline (Ctrl+U)");
+                ui.separator();
+                // The size: smaller, the number, larger.
+                if ui.add(egui::Button::new("−").min_size(vec2(22.0, 24.0))).on_hover_text("Smaller").clicked() {
+                    st.font_size = (st.font_size / 1.15).max(2.0).round().max(2.0);
+                }
+                ui.add(egui::DragValue::new(&mut st.font_size).range(2.0..=2000.0).speed(0.5).max_decimals(0)).on_hover_text("Text size");
+                if ui.add(egui::Button::new("+").min_size(vec2(22.0, 24.0))).on_hover_text("Larger").clicked() {
+                    st.font_size = (st.font_size * 1.15).min(2000.0).round();
+                }
+                ui.separator();
+                // The colour, from a small menu.
+                let current = if is_text { Some(st.ink) } else { st.text_ink };
+                let shown = current.map(|c| c.color(p)).unwrap_or(p.text);
+                let (r, dot) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+                ui.painter().circle(r.center(), 7.0, shown, Stroke::new(1.0, if dot.hovered() { p.accent } else { p.hairline }));
+                let menu = egui::Popup::menu(&dot.on_hover_text("Text colour")).show(|ui| {
+                    if let Some(ink) = crate::panels::ink_row(ui, current.unwrap_or(board::Ink::Auto)) {
+                        if is_text {
+                            st.ink = ink;
+                        } else {
+                            st.text_ink = if ink == board::Ink::Auto { None } else { Some(ink) };
+                        }
+                    }
+                });
+                if let Some(m) = menu {
+                    taken = taken.union(m.response.rect);
+                }
+                ui.separator();
+                // Alignment: three little paragraphs.
+                let own = if is_text { board::TextAlign::Left } else { board::TextAlign::Center };
+                for (a, tip) in [(board::TextAlign::Left, "Align left"), (board::TextAlign::Center, "Centre"), (board::TextAlign::Right, "Align right")] {
+                    let on = st.align.unwrap_or(own) == a;
+                    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+                    if on || resp.hovered() {
+                        ui.painter().rect_filled(r.shrink(1.0), CornerRadius::same(5), if on { p.accent.gamma_multiply(0.25) } else { p.bg_control_hover });
+                    }
+                    let c = if on { p.text } else { p.text_secondary };
+                    for (k, len) in [12.0, 8.0, 12.0, 6.0].iter().enumerate() {
+                        let y = r.top() + 7.0 + k as f32 * 3.4;
+                        let (x0, x1) = match a {
+                            board::TextAlign::Left => (r.center().x - 6.0, r.center().x - 6.0 + len),
+                            board::TextAlign::Center => (r.center().x - len * 0.5, r.center().x + len * 0.5),
+                            board::TextAlign::Right => (r.center().x + 6.0 - len, r.center().x + 6.0),
+                        };
+                        ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(1.4, c));
+                    }
+                    if resp.on_hover_text(tip).clicked() {
+                        st.align = if a == own { None } else { Some(a) };
+                    }
+                }
+            });
+        });
+    });
+    taken.union(resp.response.rect)
+}
+
+/// The distance between a new grid note's dots, in world units.
+const GRID_SPACING: f32 = 24.0;
+
+/// The outline of a rectangle with rounded corners of `radius`, as points.
+fn rounded_outline(r: Rect, radius: f32) -> Vec<Pos2> {
+    let rad = radius.min(r.width() * 0.5).min(r.height() * 0.5).max(0.0);
+    let mut pts = Vec::new();
+    let corners = [(r.right_bottom() - vec2(rad, rad), 0.0), (r.left_bottom() + vec2(rad, -rad), 0.25), (r.left_top() + vec2(rad, rad), 0.5), (r.right_top() + vec2(-rad, rad), 0.75)];
+    for (c, start) in corners {
+        for k in 0..=8 {
+            let a = (start + k as f32 / 8.0 * 0.25) * std::f32::consts::TAU;
+            pts.push(c + vec2(a.cos(), a.sin()) * rad);
+        }
+    }
+    pts
 }
 
 fn wire_font(z: f32) -> f32 {

@@ -31,6 +31,15 @@ pub fn group_pad_top(font: f32) -> f32 {
     font * 1.6 + 12.0
 }
 
+/// A line on a grid note, from dot `a` to dot `b` (column and row, counted from 1 at the top left).
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+pub struct GridLine {
+    pub a: [i32; 2],
+    pub b: [i32; 2],
+    pub ink: Ink,
+    pub width: f32,
+}
+
 /// A colour that is either fixed or follows the theme's text colour (so ink stays visible in both modes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Ink {
@@ -94,6 +103,31 @@ pub struct Style {
     pub glass: bool,
     /// Hand-drawn outline.
     pub sketch: bool,
+    /// Text: heavier type, slanted, underlined.
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    /// Text alignment; `None` is the item's own (left in text boxes, centred in shapes).
+    pub align: Option<TextAlign>,
+    /// The colour of a shape's text; `None` follows the shape.
+    pub text_ink: Option<Ink>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+impl TextAlign {
+    pub fn egui(self) -> egui::Align {
+        match self {
+            TextAlign::Left => egui::Align::LEFT,
+            TextAlign::Center => egui::Align::Center,
+            TextAlign::Right => egui::Align::RIGHT,
+        }
+    }
 }
 
 impl Default for Style {
@@ -111,6 +145,11 @@ impl Default for Style {
             shadow: false,
             glass: false,
             sketch: false,
+            bold: false,
+            italic: false,
+            underline: false,
+            align: None,
+            text_ink: None,
         }
     }
 }
@@ -326,6 +365,13 @@ pub enum Kind {
     /// A named area of the board, drawn behind everything; a slide when presenting. `slide` orders
     /// the frames of a page.
     Frame { slide: u32 },
+    /// A grid note: an area like a frame, with dots to draw straight lines between. `spacing` is
+    /// the distance between dots in world units.
+    Grid {
+        spacing: f32,
+        #[serde(default)]
+        lines: Vec<GridLine>,
+    },
     /// A named, coloured frame around other objects. Its rect follows its members. A collapsed group
     /// hides its members and shows as one compact node; their connections attach to it instead.
     Group {
@@ -379,6 +425,7 @@ impl Kind {
             Kind::Text => "Text",
             Kind::Note { .. } => "Note",
             Kind::Frame { .. } => "Frame",
+            Kind::Grid { .. } => "Grid note",
             Kind::Group { sketch: true, .. } => "Sketch",
             Kind::Group { .. } => "Group",
         }
@@ -507,8 +554,32 @@ impl Object {
     pub fn is_group(&self) -> bool {
         matches!(self.kind, Kind::Group { .. })
     }
+    /// A frame or a grid note: an area drawn behind everything that carries what is on it.
     pub fn is_frame(&self) -> bool {
-        matches!(self.kind, Kind::Frame { .. })
+        matches!(self.kind, Kind::Frame { .. } | Kind::Grid { .. })
+    }
+
+    /// A grid note's dot at `d` (column, row), in world space.
+    pub fn grid_dot(&self, d: [i32; 2]) -> Pos2 {
+        let spacing = if let Kind::Grid { spacing, .. } = self.kind { spacing } else { 1.0 };
+        self.rect().min + vec2(d[0] as f32, d[1] as f32) * spacing
+    }
+
+    /// How many dots a grid note has across and down (half a step is kept clear of the edges).
+    pub fn grid_size(&self) -> (i32, i32) {
+        let Kind::Grid { spacing, .. } = self.kind else { return (0, 0) };
+        let r = self.rect();
+        let n = |len: f32| (len / spacing.max(1.0) - 0.5).floor().max(0.0) as i32;
+        (n(r.width()), n(r.height()))
+    }
+
+    /// The grid note's dot nearest `p`, if it is within `reach` of it.
+    pub fn grid_dot_at(&self, p: Pos2, reach: f32) -> Option<[i32; 2]> {
+        let Kind::Grid { spacing, .. } = self.kind else { return None };
+        let (cols, rows) = self.grid_size();
+        let q = (p - self.rect().min) / spacing.max(1.0);
+        let d = [q.x.round() as i32, q.y.round() as i32];
+        ((1..=cols).contains(&d[0]) && (1..=rows).contains(&d[1]) && self.grid_dot(d).distance(p) <= reach).then_some(d)
     }
     pub fn is_sketch(&self) -> bool {
         matches!(self.kind, Kind::Group { sketch: true, .. })
@@ -550,7 +621,7 @@ impl Object {
             // A sketch is hit through its strokes, never its empty box.
             Kind::Group { sketch: true, .. } => false,
             // A frame is picked by its edge or its name above it, so what is inside stays easy to pick.
-            Kind::Frame { .. } => {
+            Kind::Frame { .. } | Kind::Grid { .. } => {
                 let r = self.rect();
                 let edge = r.expand(tol).contains(p) && !r.shrink(tol).contains(p);
                 let title = p.y <= r.top() && p.y >= r.top() - tol * 4.0 && p.x >= r.left() && p.x <= r.left() + r.width().min(tol * 40.0);
@@ -603,6 +674,33 @@ pub struct Wire {
     /// Its own colour; `None` is the theme's.
     #[serde(default)]
     pub color: Option<Ink>,
+    /// How thick it is, as a multiple of the normal line (0 is normal).
+    #[serde(default)]
+    pub weight: f32,
+    #[serde(default)]
+    pub dash: Dash,
+    /// The caption's size, as a multiple of the normal (0 is normal).
+    #[serde(default)]
+    pub label_size: f32,
+    /// Where the caption sits along the line, from the start (0) to the end (1).
+    #[serde(default = "half")]
+    pub label_at: f32,
+    /// The caption without the rounded box behind it.
+    #[serde(default)]
+    pub label_plain: bool,
+}
+
+fn half() -> f32 {
+    0.5
+}
+
+impl Wire {
+    pub fn weight(&self) -> f32 {
+        if self.weight > 0.0 { self.weight } else { 1.0 }
+    }
+    pub fn label_size(&self) -> f32 {
+        if self.label_size > 0.0 { self.label_size } else { 1.0 }
+    }
 }
 
 /// An image embedded in the board, stored as its original encoded bytes.
@@ -1074,7 +1172,7 @@ impl Board {
             return None;
         }
         let id = self.new_id();
-        self.wires.push(Wire { id, from, from_side, to, to_side, label: String::new(), style, color: None });
+        self.wires.push(Wire { id, from, from_side, to, to_side, label: String::new(), style, color: None, weight: 0.0, dash: Dash::Solid, label_size: 0.0, label_at: 0.5, label_plain: false });
         Some(id)
     }
 
@@ -1239,8 +1337,20 @@ pub fn simplify(points: &[Pos2], eps: f32) -> Vec<Pos2> {
 
 /// The point halfway along a polyline.
 pub fn midpoint(pts: &[Pos2]) -> Pos2 {
+    point_along(pts, 0.5)
+}
+
+/// Do the segments a-b and c-d cross?
+pub fn segments_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
+    let side = |p: Pos2, q: Pos2, r: Pos2| (q - p).x * (r - p).y - (q - p).y * (r - p).x;
+    let (d1, d2, d3, d4) = (side(c, d, a), side(c, d, b), side(a, b, c), side(a, b, d));
+    d1 * d2 <= 0.0 && d3 * d4 <= 0.0
+}
+
+/// The point a fraction `t` (0 to 1) of the way along a polyline.
+pub fn point_along(pts: &[Pos2], t: f32) -> Pos2 {
     let total: f32 = pts.windows(2).map(|s| s[0].distance(s[1])).sum();
-    let mut left = total * 0.5;
+    let mut left = total * t.clamp(0.0, 1.0);
     for s in pts.windows(2) {
         let l = s[0].distance(s[1]);
         if l >= left && l > 0.0 {

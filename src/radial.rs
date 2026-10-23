@@ -195,7 +195,7 @@ fn items(ed: &Editor, r: &Radial) -> Vec<Item> {
                 let mut shapes: Vec<Child> = [Tool::Line, Tool::Arrow].into_iter().map(tool).collect();
                 shapes.push(Child { label: "Polyline (U)".into(), look: Look::Tool(Tool::Polyline), act: Act::Poly(false), current: poly && !ed.poly_curved, sub: Vec::new() });
                 shapes.push(Child { label: "Curve through points".into(), look: Look::Paint(paint_curve_icon), act: Act::Poly(true), current: poly && ed.poly_curved, sub: Vec::new() });
-                shapes.extend([Tool::Rectangle, Tool::Ellipse, Tool::Text, Tool::Frame].into_iter().map(tool));
+                shapes.extend([Tool::Rectangle, Tool::Ellipse, Tool::Text, Tool::Frame, Tool::GridNote].into_iter().map(tool));
                 // Flowchart boxes are added like the "/" list does: connected to the selected node.
                 let flow: Vec<Child> = crate::insert::items()
                     .into_iter()
@@ -609,7 +609,7 @@ fn draw(painter: &Painter, p: &Pal, r: &Radial, list: &[Item]) {
     for (k, a) in [(10.0, 18u8), (5.0, 26), (2.0, 34)] {
         painter.circle_filled(c + vec2(0.0, 3.0), R1 + k, Color32::from_black_alpha(a));
     }
-    painter.circle(c, R1, p.window_fill, Stroke::new(1.0, p.window_stroke));
+    painter.circle(c, R1, crate::theme::translucent(p.window_fill, 228), Stroke::new(1.0, p.window_stroke));
     // Thin dividers between wedges.
     for i in 0..n {
         let a = wedge_angle(i, n) + step * 0.5;

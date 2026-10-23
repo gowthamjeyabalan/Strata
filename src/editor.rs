@@ -40,6 +40,8 @@ pub struct Editor {
     pub camera: Camera,
     pub selection: Vec<Id>,
     pub selected_wire: Option<Id>,
+    /// More connections selected, by a selection box or Shift-click.
+    pub marked_wires: Vec<Id>,
     pub tool: Tool,
     /// Style for new objects.
     pub style: Style,
@@ -172,6 +174,7 @@ impl Default for Editor {
             camera: Camera::default(),
             selection: Vec::new(),
             selected_wire: None,
+            marked_wires: Vec::new(),
             tool: Tool::Select,
             style: Style::default(),
             node_shape: Shape::Process,
@@ -381,7 +384,7 @@ impl Editor {
         let id = self.board.add(Rect::from_center_size(at, vec2(300.0, 240.0)), Kind::Note { note }, Style::default());
         self.mark_changed();
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
         id
     }
 
@@ -434,6 +437,35 @@ impl Editor {
         self.mark_changed();
         let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         Some(format!("![{name}](image:{id})"))
+    }
+
+    /// Pictures on the clipboard, put into the board for a note: images copied in Overlay, or an image
+    /// such as a screenshot. Returns the text that shows them, or None when there are none.
+    pub fn clipboard_pictures(&mut self) -> Option<String> {
+        let mut cb = arboard::Clipboard::new().ok()?;
+        if cb.get_text().ok().as_deref() == Some(CLIPBOARD_MARKER) {
+            let clip = self.clip.clone();
+            let mut out = Vec::new();
+            for o in &clip.objects {
+                let Kind::Image { image, .. } = o.kind else { continue };
+                if let Some((_, a)) = clip.images.iter().find(|(i, _)| *i == image) {
+                    self.board.images.entry(image).or_insert_with(|| a.clone());
+                    let name = if o.label.trim().is_empty() { "image".to_owned() } else { o.label.trim().to_owned() };
+                    out.push(format!("![{name}](image:{image})"));
+                }
+            }
+            if out.is_empty() {
+                return None;
+            }
+            self.mark_changed();
+            return Some(out.join("\n\n"));
+        }
+        let img = cb.get_image().ok()?;
+        let png = encode_png(img.width as u32, img.height as u32, &img.bytes).ok()?;
+        let id = self.board.new_id();
+        self.board.images.insert(id, ImageAsset { bytes: Arc::new(png), size: [img.width as u32, img.height as u32] });
+        self.mark_changed();
+        Some(format!("![pasted](image:{id})"))
     }
 
     /// Is there a note or an item called `name` (what a `[[Name]]` link leads to)?
@@ -524,7 +556,7 @@ impl Editor {
         if let Some(r) = self.board.get(id).map(|o| o.rect()) {
             self.camera.fit(self.canvas_rect, r.expand(r.width().max(r.height()) * 0.04));
             self.selection = vec![id];
-            self.selected_wire = None;
+            self.clear_wires();
         }
     }
 
@@ -539,7 +571,7 @@ impl Editor {
         self.page_cams.insert(self.page, self.camera);
         self.page = id;
         self.selection.clear();
-        self.selected_wire = None;
+        self.clear_wires();
         self.poly.clear();
         match self.page_cams.get(&id) {
             Some(c) => self.camera = *c,
@@ -585,7 +617,7 @@ impl Editor {
         self.fit_pending = false;
         self.finish_edit();
         self.selection = vec![self.board.outer_sketch(id)];
-        self.selected_wire = None;
+        self.clear_wires();
     }
 
     // ── history ──
@@ -651,6 +683,7 @@ impl Editor {
         if self.selected_wire.is_some_and(|w| b.wire(w).is_none()) {
             self.selected_wire = None;
         }
+        self.marked_wires.retain(|w| b.wire(*w).is_some());
         if self.comments_open.is_some_and(|id| b.get(id).is_none()) {
             self.comments_open = None;
         }
@@ -711,12 +744,25 @@ impl Editor {
     pub fn select_all(&mut self) {
         let inner = self.board.sketch_inner();
         self.selection = self.board.objects.iter().map(|o| o.id).filter(|id| !inner.contains(id)).collect();
+        self.clear_wires();
+    }
+
+    /// Deselect every connection.
+    pub fn clear_wires(&mut self) {
         self.selected_wire = None;
+        self.marked_wires.clear();
+    }
+
+    /// Every selected connection.
+    pub fn wires_selected(&self) -> Vec<Id> {
+        let mut v: Vec<Id> = self.selected_wire.into_iter().collect();
+        v.extend(self.marked_wires.iter().copied().filter(|w| Some(*w) != self.selected_wire));
+        v
     }
 
     pub fn clear_selection(&mut self) {
         self.selection.clear();
-        self.selected_wire = None;
+        self.clear_wires();
     }
 
     /// Deletes the selected objects (a group goes with everything in it), or the selected connection.
@@ -738,10 +784,15 @@ impl Editor {
                 msg.push_str(&format!("; {} locked, kept", plural(kept, "item is", "items are")));
             }
             self.say(msg);
-        } else if let Some(w) = self.selected_wire.take() {
-            self.mark_changed();
-            self.board.wires.retain(|x| x.id != w);
-            self.say("Deleted 1 connection");
+        }
+        let wires = self.wires_selected();
+        if !wires.is_empty() {
+            if self.selection.is_empty() {
+                self.mark_changed();
+                self.say(format!("Deleted {}", plural(wires.len(), "connection", "connections")));
+            }
+            self.board.wires.retain(|x| !wires.contains(&x.id));
+            self.clear_wires();
         }
     }
 
@@ -782,7 +833,7 @@ impl Editor {
                 self.mark_changed();
                 let n = self.board.members(g).len();
                 self.selection = vec![g];
-                self.selected_wire = None;
+                self.clear_wires();
                 self.say(format!("Joined {} into one sketch. Ctrl+Shift+G splits it again.", plural(n, "stroke", "strokes")));
             }
             return;
@@ -792,7 +843,7 @@ impl Editor {
             self.mark_changed();
             let n = self.board.members(g).len();
             self.selection = vec![g];
-            self.selected_wire = None;
+            self.clear_wires();
             self.say(format!("Grouped {}. Double-click the name to rename it.", plural(n, "object", "objects")));
         }
     }
@@ -821,7 +872,7 @@ impl Editor {
     pub fn start_edit(&mut self, id: Id) {
         self.finish_edit();
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
         if self.is_locked(id) {
             self.say("This item is locked. Unlock it to edit it.");
             return;
@@ -836,6 +887,7 @@ impl Editor {
         self.editing_wire = Some(id);
         self.edit_focus = true;
         self.selection.clear();
+        self.clear_wires();
         self.selected_wire = Some(id);
     }
 
@@ -945,7 +997,7 @@ impl Editor {
         let inner: Vec<Id> = new_ids.iter().flat_map(|id| self.board.members(*id)).collect();
         new_ids.retain(|id| !inner.contains(id));
         self.selection = new_ids;
-        self.selected_wire = None;
+        self.clear_wires();
         map
     }
 
@@ -1050,7 +1102,7 @@ impl Editor {
             }
         }
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
         self.say(format!("Added image {w} x {h}"));
         Ok(id)
     }
@@ -1101,6 +1153,27 @@ impl Editor {
         }
     }
 
+    /// Scale the selection by `k` about the middle of its box (text sizes too).
+    pub fn scale_selection(&mut self, k: f32) {
+        let Some(b) = self.selection.iter().filter(|id| !self.is_locked(**id)).filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b)) else { return };
+        self.mark_changed();
+        let c = b.center();
+        let ids = self.board.with_descendants(&self.selection);
+        for id in ids {
+            if self.is_locked(id) {
+                continue;
+            }
+            if let Some(o) = self.board.get_mut(id) {
+                let r = o.rect();
+                o.set_rect(Rect::from_min_max(c + (r.min - c) * k, c + (r.max - c) * k));
+                if matches!(o.kind, Kind::Text | Kind::Shape { .. }) {
+                    o.style.font_size = (o.style.font_size * k).clamp(2.0, 2000.0);
+                }
+            }
+        }
+        self.board.update_groups();
+    }
+
     /// A box is being drawn (the arrow keys then shape its grid instead of nudging).
     pub fn drawing_box(&self) -> bool {
         matches!(self.drag, Drag::Box { .. })
@@ -1109,7 +1182,7 @@ impl Editor {
     /// Fit the view to the selected items (or the selected connection's ends).
     pub fn zoom_to_selection(&mut self) {
         let mut ids = self.selection.clone();
-        if let Some(w) = self.selected_wire.and_then(|w| self.board.wire(w)) {
+        for w in self.wires_selected().iter().filter_map(|w| self.board.wire(*w)) {
             ids.extend([w.from, w.to]);
         }
         match ids.iter().filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b)) {

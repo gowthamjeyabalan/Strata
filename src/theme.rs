@@ -107,6 +107,11 @@ pub const LIGHT: Pal = Pal {
     shadow_popup: 36,
 };
 
+/// `c` at `alpha` (0 to 255) opacity.
+pub fn translucent(c: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+}
+
 /// The palette for the appearance egui is drawing with right now.
 pub fn pal(ctx: &Context) -> &'static Pal {
     match ctx.theme() {
@@ -207,7 +212,8 @@ fn style(style: &mut egui::Style, p: &Pal, dark: bool) {
     *v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
     v.override_text_color = None;
     v.panel_fill = p.bg;
-    v.window_fill = p.window_fill;
+    // Floating windows, menus and popups let the board show through a little.
+    v.window_fill = translucent(p.window_fill, 232);
     v.window_stroke = Stroke::new(1.0, p.window_stroke);
     v.window_corner_radius = CornerRadius::same(12);
     v.menu_corner_radius = CornerRadius::same(10);

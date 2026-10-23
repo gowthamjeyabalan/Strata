@@ -109,7 +109,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
                         let fill = if o.style.fill { ink.gamma_multiply(0.25) } else { Color32::TRANSPARENT };
                         paint_shape(&painter, *shape, r, scale, fill, Stroke::new(1.0, ink));
                     }
-                    Kind::Frame { .. } => {
+                    Kind::Frame { .. } | Kind::Grid { .. } => {
                         painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, p.hairline), StrokeKind::Inside);
                     }
                     Kind::Note { .. } => {

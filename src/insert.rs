@@ -173,7 +173,7 @@ impl Editor {
         }
         self.mark_changed();
         self.selection = vec![id];
-        self.selected_wire = None;
+        self.clear_wires();
         if label {
             self.start_edit(id);
         }
