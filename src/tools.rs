@@ -1,7 +1,7 @@
 //! Tools and their icons.
 //!
 //! The design system has no icon set. Tool icons are drawn here as small vector strokes in the style of
-//! the Grapht mark (round caps and joins, one weight), coloured like text so they follow the theme.
+//! the Graphsight mark (round caps and joins, one weight), coloured like text so they follow the theme.
 
 use crate::board::Brush;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, vec2};

@@ -184,7 +184,7 @@ Overlay is written in Rust with [egui](https://github.com/emilk/egui) and [egui_
 | `src/dates.rs`, `src/calendar.rs` | Dates on items and the calendar |
 | `src/app.rs`, `src/theme.rs` | Window, menus, shortcuts, settings, and the theme |
 
-The look follows the **Grapht** design system: a quiet grey interface with one blue accent, Inter type, and round strokes. Its tokens and notes are in [`design/`](design). The logo is an "O" left open and closed by a blue dot; the brand kit and its generator are in [`brand/`](brand).
+The look follows the **GJ Design System**: a quiet grey interface with one blue accent, Inter type, and round strokes. Its tokens and notes are in [`design/`](design). The logo is an "O" left open and closed by a blue dot; the brand kit and its generator are in [`brand/`](brand).
 
 ## Licence
 

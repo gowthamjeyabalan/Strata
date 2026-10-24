@@ -428,7 +428,7 @@ fn about(ui: &mut Ui) {
     ui.label(theme::semibold(format!("Overlay {}", env!("CARGO_PKG_VERSION"))).size(15.0).color(p.text));
     ui.label(RichText::new("A whiteboard where every image, sketch, shape and note is a node.").size(13.0).color(p.text_secondary));
     ui.add_space(10.0);
-    ui.label(RichText::new("Written in Rust with egui. The look follows the Grapht design system. Released under the MIT licence.").size(12.5).color(p.text_secondary));
+    ui.label(RichText::new("Written in Rust with egui. The look follows the GJ Design System. Released under the MIT licence.").size(12.5).color(p.text_secondary));
     ui.add_space(6.0);
     ui.hyperlink_to("github.com/gowthamjeyabalan/overlay", "https://github.com/gowthamjeyabalan/overlay");
 }

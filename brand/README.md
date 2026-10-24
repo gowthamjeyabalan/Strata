@@ -9,7 +9,7 @@
 
 An "O" for Overlay, left open at the top right. The blue dot closes it. A board is finished when things connect: the dot is a node, and it completes the shape the way a connection completes a graph.
 
-Overlay is a sibling of Grapht, so the mark follows Grapht's rules exactly. It is drawn in the same 100-unit box with the same 10-unit round strokes, with one blue dot. As with Grapht, the app icon is the white mark on a Hub Blue tile, so the two sit together on the taskbar; the Night tile is the alternate.
+Overlay is a sibling of Graphsight, so the mark follows Graphsight's rules exactly. It is drawn in the same 100-unit box with the same 10-unit round strokes, with one blue dot. As with Graphsight, the app icon is the white mark on a Hub Blue tile, so the two sit together on the taskbar; the Night tile is the alternate.
 
 ## Construction
 

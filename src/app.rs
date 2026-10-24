@@ -528,7 +528,7 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         let p = pal(ui.ctx());
-        // As in Grapht: the menus start the row; the window's own title bar carries the icon and name.
+        // As in Graphsight: the menus start the row; the window's own title bar carries the icon and name.
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("New board").clicked() {
@@ -726,7 +726,7 @@ impl App {
         }
     }
 
-    /// The start view, as in Grapht: the name, ways in, and the boards used lately.
+    /// The start view, as in Graphsight: the name, ways in, and the boards used lately.
     fn start_view(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let p = pal(&ctx);

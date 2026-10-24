@@ -1,7 +1,7 @@
 //! Visual design: an Apple-flavoured theme (Inter typeface, soft greys, a single blue accent),
 //! plus a few small widgets (switch, segmented control, section headings, cards).
 //!
-//! Copied from the Grapht design system (`design/` holds the source docs and tokens).
+//! Copied from the GJ Design System (`design/` holds the source docs and tokens).
 //! Overlay adds the derived light theme from `tokens.css` (`[data-theme="light"]`): both styles are
 //! registered with egui and the theme preference (dark, light, follow the system) picks one.
 
@@ -78,7 +78,7 @@ pub const DARK: Pal = Pal {
 
 // ── derived light theme (tokens.css, values chosen to hold 4.5:1 contrast) ──
 /// Light mode is a soft grey rather than white: the ground, cards and board sit a step below paper
-/// white so large areas do not glare, and secondary text and dividers are darker than Grapht's
+/// white so large areas do not glare, and secondary text and dividers are darker than Graphsight's
 /// derived light values so they stay legible on it.
 pub const LIGHT: Pal = Pal {
     bg: rgb(0xe6e6ea),

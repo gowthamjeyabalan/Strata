@@ -1,6 +1,6 @@
-# Grapht
+# GJ Design System
 
-Grapht is a Windows desktop tool (Rust, egui) that turns node and edge CSV files into a graph you can look at and analyse. Its design is a quiet dark interface in the macOS dark-appearance style: neutral greys, one blue, Inter type, rounded controls, and almost no decoration. This system records every choice so a future project can look like a sibling.
+The GJ Design System was first made for Graphsight, a Windows desktop tool (Rust, egui) that turns node and edge CSV files into a graph you can look at and analyse. Its design is a quiet dark interface in the macOS dark-appearance style: neutral greys, one blue, Inter type, rounded controls, and almost no decoration. This system records every choice so a future project can look like a sibling.
 
 ## Principles
 
@@ -35,7 +35,7 @@ Grapht is a Windows desktop tool (Rust, egui) that turns node and edge CSV files
 
 ## Iconography
 
-The interface uses no icon font and no bitmap icons. Symbols come from text glyphs (arrows, chevrons, the close cross) rendered by egui's fallback fonts behind Inter. The only pictorial mark is the Grapht mark: a circle, a hooked line and a blue dot, drawn as 10-unit round strokes. See Logos for usage.
+The interface uses no icon font and no bitmap icons. Symbols come from text glyphs (arrows, chevrons, the close cross) rendered by egui's fallback fonts behind Inter. The only pictorial mark is the app mark (Graphsight's first): a circle, a hooked line and a blue dot, drawn as 10-unit round strokes. See Logos for usage.
 
 ## Where to go next
 

@@ -1,6 +1,6 @@
 //! A small markdown reader and painter for notes: headings, paragraphs, bold, italic, strikethrough,
 //! inline code and code blocks, quotes, rules, bullet, numbered and task lists, pipe tables, links and
-//! `[[Name]]` links to other notes or items. Painted with the Grapht type, at any zoom.
+//! `[[Name]]` links to other notes or items. Painted with the GJ Design System type, at any zoom.
 
 use crate::theme::{self, Pal};
 use egui::text::{LayoutJob, TextFormat};

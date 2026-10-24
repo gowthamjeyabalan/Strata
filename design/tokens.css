@@ -1,4 +1,4 @@
-/* Grapht design tokens. dark = the app; light = derived for reuse. */
+/* GJ Design System tokens. dark = the app; light = derived for reuse. */
 :root, [data-theme="dark"] {
   --bg-app: #1c1c1f;
   --bg-elevated: #26262a;

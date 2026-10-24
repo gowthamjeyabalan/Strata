@@ -1,7 +1,7 @@
 //! Overlay brand kit generator.
 //!
 //! The mark is an "O" left open at the top right, closed by the blue dot: a board is finished when
-//! things connect. It follows the Grapht rules: 10-unit round strokes in a 100-unit box, one blue dot,
+//! things connect. It follows the Graphsight rules: 10-unit round strokes in a 100-unit box, one blue dot,
 //! Paper strokes on Night for the app icon, and a heavier cut (12.5 stroke) for 32 px and smaller.
 //!
 //! Run from the repository root:  cargo run --release --manifest-path tools/brand/Cargo.toml
@@ -276,7 +276,7 @@ fn main() {
         out.png(&format!("overlay-mark-{name}-1024"), &svg, 1024, 1024);
     }
 
-    // App icons: Blue (the app icon, as Grapht's) and Night, each with a small cut.
+    // App icons: Blue (the app icon, as Graphsight's) and Night, each with a small cut.
     let icons = [
         ("dark", icon_svg(&REGULAR, NIGHT, PAPER, BLUE), icon_svg(&SMALL, NIGHT, PAPER, BLUE)),
         ("blue", icon_svg(&REGULAR, BLUE, WHITE, WHITE), icon_svg(&SMALL, BLUE, WHITE, WHITE)),
@@ -290,7 +290,7 @@ fn main() {
         }
     }
     out.svg("favicon", &icons[1].2);
-    // Like Grapht, the blue icon is the default and the Night one is the alternate.
+    // Like Graphsight, the blue icon is the default and the Night one is the alternate.
     ico(&mut out, "overlay", &icons[1].1, &icons[1].2);
     ico(&mut out, "overlay-dark", &icons[0].1, &icons[0].2);
 
