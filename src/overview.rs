@@ -67,59 +67,7 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
             }
 
             let look = ed.board.lookup();
-            for k in 0..ed.board.objects.len() {
-                if look.hidden(ed.board.objects[k].id) {
-                    continue;
-                }
-                let image = if let Kind::Image { image, .. } = ed.board.objects[k].kind { Some(image) } else { None };
-                let tex = image.and_then(|img| ed.texture(ctx, img));
-                let o = &ed.board.objects[k];
-                let r = Rect::from_min_max(to_mini(o.rect().min), to_mini(o.rect().max));
-                let ink = ed.board.ink_of(o).color(p);
-                match &o.kind {
-                    Kind::Group { sketch: true, .. } => {}
-                    Kind::Group { .. } => {
-                        let c = if o.style.ink == board::Ink::Auto { p.text_secondary } else { ink };
-                        painter.rect(r, CornerRadius::same(3), c.gamma_multiply(0.08), Stroke::new(1.0, c.gamma_multiply(0.8)), StrokeKind::Inside);
-                    }
-                    Kind::Image { .. } => match tex {
-                        Some(t) => {
-                            painter.image(t, r, o.image_uv(), Color32::WHITE);
-                        }
-                        None => {
-                            painter.rect_filled(r, 0.0, p.faint_bg);
-                        }
-                    },
-                    Kind::Path { brush, .. } => {
-                        let pts = o.line_points();
-                        // Thin out long strokes; the map is small.
-                        let step = (pts.len() / 48).max(1);
-                        let mut mini: Vec<Pos2> = pts.iter().step_by(step).map(|q| to_mini(*q)).collect();
-                        if let Some(last) = pts.last() {
-                            mini.push(to_mini(*last));
-                        }
-                        let w = (o.style.width * scale).max(0.6);
-                        paint_stroke(&painter, &mini, Stroke::new(w, ink.gamma_multiply(brush.alpha())), *brush);
-                    }
-                    // A few pixels across, a shape looks the same as a filled box and is far cheaper.
-                    Kind::Shape { .. } if r.width().max(r.height()) < 5.0 => {
-                        painter.rect_filled(r, 0.0, ink.gamma_multiply(if o.style.fill { 0.6 } else { 0.4 }));
-                    }
-                    Kind::Shape { shape } => {
-                        let fill = if o.style.fill { ink.gamma_multiply(0.25) } else { Color32::TRANSPARENT };
-                        paint_shape(&painter, *shape, r, scale, fill, Stroke::new(1.0, ink));
-                    }
-                    Kind::Frame { .. } | Kind::Grid { .. } => {
-                        painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, p.hairline), StrokeKind::Inside);
-                    }
-                    Kind::Note { .. } => {
-                        painter.rect(r, CornerRadius::same(2), p.window_fill, Stroke::new(1.0, p.window_stroke), StrokeKind::Inside);
-                    }
-                    Kind::Text => {
-                        painter.rect_filled(r, 1.0, ink.gamma_multiply(0.35));
-                    }
-                }
-            }
+            paint_items(ctx, &painter, ed, &to_mini, scale, &|id| look.hidden(id));
             for w in &ed.board.wires {
                 if let Some(pts) = look.wire_points(&ed.board, w) {
                     let step = (pts.len() / 8).max(1);
@@ -135,4 +83,92 @@ pub fn show(ctx: &egui::Context, ed: &mut Editor) {
         });
     // The window's × switches it off.
     ed.show_overview = open;
+}
+
+/// A small picture of page `page`, fitted into `rect` (the tooltip of its page button).
+pub fn paint_page(ctx: &egui::Context, painter: &egui::Painter, ed: &mut Editor, page: board::Id, rect: Rect) {
+    let p = pal(ctx);
+    painter.rect(rect, CornerRadius::same(6), p.canvas, Stroke::new(1.0, p.hairline), StrokeKind::Inside);
+    let hidden_layers: Vec<board::Id> = ed.board.layers.iter().filter(|l| l.hidden).map(|l| l.id).collect();
+    let on_page: std::collections::HashSet<board::Id> = ed.board.objects.iter().filter(|o| o.page == page && !hidden_layers.contains(&o.layer)).map(|o| o.id).collect();
+    let Some(bounds) = ed.board.objects.iter().filter(|o| on_page.contains(&o.id)).map(|o| o.rect()).reduce(|a, b| a.union(b)) else {
+        painter.text(rect.center(), egui::Align2::CENTER_CENTER, "Empty page", egui::FontId::proportional(11.0), p.text_secondary);
+        return;
+    };
+    let bounds = bounds.expand(bounds.width().max(bounds.height()) * 0.04 + 10.0);
+    let inner = rect.shrink(4.0);
+    let scale = (inner.width() / bounds.width()).min(inner.height() / bounds.height());
+    let to_mini = |w: Pos2| inner.center() + (w - bounds.center()) * scale;
+    let painter = painter.with_clip_rect(rect.shrink(1.0));
+    paint_items(ctx, &painter, ed, &to_mini, scale, &|id| !on_page.contains(&id));
+    for w in &ed.board.wires {
+        if !(on_page.contains(&w.from) && on_page.contains(&w.to)) {
+            continue;
+        }
+        if let Some(pts) = ed.board.wire_points(w) {
+            let mini: Vec<Pos2> = pts.iter().map(|q| to_mini(*q)).collect();
+            painter.add(egui::Shape::line(mini, Stroke::new(1.0, p.text_secondary.gamma_multiply(0.7))));
+        }
+    }
+}
+
+/// The board's items drawn small, through `to_mini`, leaving out those `skip` names.
+fn paint_items(ctx: &egui::Context, painter: &egui::Painter, ed: &mut Editor, to_mini: &dyn Fn(Pos2) -> Pos2, scale: f32, skip: &dyn Fn(board::Id) -> bool) {
+    let p = pal(ctx);
+    for k in 0..ed.board.objects.len() {
+        if skip(ed.board.objects[k].id) {
+            continue;
+        }
+        let image = if let Kind::Image { image, .. } = ed.board.objects[k].kind { Some(image) } else { None };
+        let tex = image.and_then(|img| ed.texture(ctx, img));
+        let o = &ed.board.objects[k];
+        let r = Rect::from_min_max(to_mini(o.rect().min), to_mini(o.rect().max));
+        let ink = ed.board.ink_of(o).color(p);
+        match &o.kind {
+            Kind::Group { sketch: true, .. } => {}
+            Kind::Group { .. } => {
+                let c = if o.style.ink == board::Ink::Auto { p.text_secondary } else { ink };
+                painter.rect(r, CornerRadius::same(3), c.gamma_multiply(0.08), Stroke::new(1.0, c.gamma_multiply(0.8)), StrokeKind::Inside);
+            }
+            Kind::Image { .. } => match tex {
+                Some(t) => {
+                    painter.image(t, r, o.image_uv(), Color32::WHITE);
+                }
+                None => {
+                    painter.rect_filled(r, 0.0, p.faint_bg);
+                }
+            },
+            Kind::Path { brush, .. } => {
+                let pts = o.line_points();
+                // Thin out long strokes; the map is small.
+                let step = (pts.len() / 48).max(1);
+                let mut mini: Vec<Pos2> = pts.iter().step_by(step).map(|q| to_mini(*q)).collect();
+                if let Some(last) = pts.last() {
+                    mini.push(to_mini(*last));
+                }
+                let w = (o.style.width * scale).max(0.6);
+                paint_stroke(painter, &mini, Stroke::new(w, ink.gamma_multiply(brush.alpha())), *brush);
+            }
+            // A few pixels across, a shape looks the same as a filled box and is far cheaper.
+            Kind::Shape { .. } if r.width().max(r.height()) < 5.0 => {
+                painter.rect_filled(r, 0.0, ink.gamma_multiply(if o.style.fill { 0.6 } else { 0.4 }));
+            }
+            Kind::Shape { shape } => {
+                let fill = if o.style.fill { ink.gamma_multiply(0.25) } else { Color32::TRANSPARENT };
+                paint_shape(painter, *shape, r, scale, fill, Stroke::new(1.0, ink));
+            }
+            Kind::Table { .. } | Kind::Plot { .. } => {
+                painter.rect(r, CornerRadius::same(2), p.window_fill, Stroke::new(1.0, p.window_stroke), StrokeKind::Inside);
+            }
+            Kind::Frame { .. } | Kind::Grid { .. } => {
+                painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, p.hairline), StrokeKind::Inside);
+            }
+            Kind::Note { .. } => {
+                painter.rect(r, CornerRadius::same(2), p.window_fill, Stroke::new(1.0, p.window_stroke), StrokeKind::Inside);
+            }
+            Kind::Text => {
+                painter.rect_filled(r, 1.0, ink.gamma_multiply(0.35));
+            }
+        }
+    }
 }

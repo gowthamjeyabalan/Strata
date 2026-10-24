@@ -21,6 +21,7 @@ pub enum Panel {
     Notes,
     Layers,
     Frames,
+    Plot,
 }
 
 /// Commands, run by the app (some need its dialogs, settings or panels).
@@ -96,7 +97,7 @@ fn commands() -> Vec<(Cmd, String, &'static str)> {
     for t in Tool::ALL {
         v.push((Cmd::Tool(t), format!("{} tool", t.name()), "tool draw"));
     }
-    for (p, name) in [(Panel::Properties, "Properties"), (Panel::Notes, "Notes"), (Panel::Layers, "Layers"), (Panel::Frames, "Frames")] {
+    for (p, name) in [(Panel::Properties, "Properties"), (Panel::Notes, "Notes"), (Panel::Layers, "Layers"), (Panel::Frames, "Frames"), (Panel::Plot, "Plot")] {
         v.push((Cmd::Show(p), format!("Show {name}"), "panel"));
     }
     v

@@ -29,6 +29,8 @@ pub enum Tab {
     Graph,
     /// Older layouts name it; History was removed (undo stays).
     History,
+    /// Equations and their graphs.
+    Plot,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -59,6 +61,8 @@ struct Settings {
     custom_colors: Option<Vec<[u8; 3]>>,
     recent: Option<Vec<PathBuf>>,
     glass: Option<theme::Glass>,
+    /// The Plot panel was added to a layout saved before it existed.
+    plot_tab: Option<bool>,
     workspaces: Option<Vec<(String, DockState<Tab>)>>,
 }
 
@@ -231,7 +235,19 @@ impl App {
         if !reopened {
             ed.fit_pending = true;
         }
-        let dock = settings.dock.filter(|_| settings.dock_version == DOCK_VERSION).unwrap_or_else(default_dock);
+        let mut dock = settings.dock.filter(|_| settings.dock_version == DOCK_VERSION).unwrap_or_else(default_dock);
+        // A layout saved before the Plot panel existed gets it once, beside the board.
+        if settings.plot_tab.is_none() && dock.find_tab(&Tab::Plot).is_none() {
+            if let Some(path) = dock.find_tab(&Tab::Board) {
+                if let Ok(leaf) = dock.leaf_mut(path.node_path()) {
+                    leaf.append_tab(Tab::Plot);
+                }
+            }
+        }
+        // The board is in front when Overlay opens.
+        if let Some(path) = dock.find_tab(&Tab::Board) {
+            let _ = dock.set_active_tab(path);
+        }
         Self {
             ed,
             dock,
@@ -545,7 +561,7 @@ impl App {
     /// Panels on and off, and saved arrangements of them.
     fn window_menu(&mut self, ui: &mut Ui) {
         ui.label(theme::secondary(ui, "Panels"));
-        for (tab, name) in [(Tab::Notes, "Notes"), (Tab::Calendar, "Calendar"), (Tab::Properties, "Properties"), (Tab::Layers, "Layers"), (Tab::Frames, "Frames")] {
+        for (tab, name) in [(Tab::Notes, "Notes"), (Tab::Calendar, "Calendar"), (Tab::Properties, "Properties"), (Tab::Layers, "Layers"), (Tab::Frames, "Frames"), (Tab::Plot, "Plot")] {
             let mut on = self.dock.find_tab(&tab).is_some();
             if ui.checkbox(&mut on, name).clicked() {
                 self.toggle_tab(tab);
@@ -594,6 +610,16 @@ impl App {
     }
 
     /// Show a panel, or hide it if it is showing. A shown panel goes beside its usual neighbours.
+    /// Bring `tab` forward, opening it first if it is closed.
+    fn show_tab(&mut self, tab: Tab) {
+        if self.dock.find_tab(&tab).is_none() {
+            self.toggle_tab(tab);
+        }
+        if let Some(path) = self.dock.find_tab(&tab) {
+            let _ = self.dock.set_active_tab(path);
+        }
+    }
+
     fn toggle_tab(&mut self, tab: Tab) {
         if let Some(path) = self.dock.find_tab(&tab) {
             self.dock.remove_tab(path);
@@ -601,6 +627,8 @@ impl App {
         }
         let neighbour = match tab {
             Tab::Notes => None,
+            // Plots want room: beside the board.
+            Tab::Plot => self.dock.find_tab(&Tab::Board),
             Tab::Calendar => self.dock.find_tab(&Tab::Notes),
             _ => [Tab::Properties, Tab::Layers, Tab::Frames].iter().find_map(|t| self.dock.find_tab(t)),
         };
@@ -732,6 +760,7 @@ impl TabViewer for Viewer<'_> {
             Tab::Layers => "Layers",
             Tab::Graph => "Graph",
             Tab::History => "History",
+            Tab::Plot => "Plot",
         }
         .into()
     }
@@ -754,6 +783,7 @@ impl TabViewer for Viewer<'_> {
             Tab::History => {
                 ui.label(theme::secondary(ui, "History was removed; Ctrl+Z and Ctrl+Y still undo and redo. View > Reset panel layout removes this tab."));
             }
+            Tab::Plot => crate::plot::plot_ui(ui, self.ed),
         }
     }
 
@@ -883,6 +913,9 @@ impl App {
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(theme::panel_fill(p)).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
         // New items go on the current page and layer; the item list stays in layer order.
         self.ed.board.fix_pages(&mut self.ed.page);
+        if std::mem::take(&mut self.ed.show_plot) {
+            self.show_tab(Tab::Plot);
+        }
         self.ed.check_grid_sel();
         self.ed.board.fix_layers(&mut self.ed.active_layer);
         // The Calendar's chosen days hide or fade the other items.
@@ -1071,10 +1104,9 @@ impl App {
                     Panel::Notes => Tab::Notes,
                     Panel::Layers => Tab::Layers,
                     Panel::Frames => Tab::Frames,
+                    Panel::Plot => Tab::Plot,
                 };
-                if let Some(path) = self.dock.find_tab(&tab) {
-                    let _ = self.dock.set_active_tab(path);
-                }
+                self.show_tab(tab);
             }
         }
     }
@@ -1104,6 +1136,7 @@ impl App {
             custom_colors: Some(self.ed.custom_colors.clone()),
             recent: Some(self.recent.clone()),
             glass: Some(self.glass),
+            plot_tab: Some(true),
             workspaces: Some(self.workspaces.clone()),
             keys: Some(self.ed.keys.clone()),
         };

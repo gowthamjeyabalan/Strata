@@ -431,6 +431,18 @@ pub enum Kind {
         #[serde(default)]
         fills: Vec<GridFill>,
     },
+    /// A plot of equations, redrawn from them.
+    Plot { plot: crate::plot::PlotSpec },
+    /// A table: column widths and row heights (in proportion: they stretch with the rect), and the
+    /// text of each cell, row by row.
+    Table {
+        cols: Vec<f32>,
+        rows: Vec<f32>,
+        cells: Vec<Vec<String>>,
+        /// The first row is a heading row.
+        #[serde(default = "yes")]
+        header: bool,
+    },
     /// A named, coloured frame around other objects. Its rect follows its members. A collapsed group
     /// hides its members and shows as one compact node; their connections attach to it instead.
     Group {
@@ -485,6 +497,8 @@ impl Kind {
             Kind::Note { .. } => "Note",
             Kind::Frame { .. } => "Frame",
             Kind::Grid { .. } => "Grid note",
+            Kind::Table { .. } => "Table",
+            Kind::Plot { .. } => "Plot",
             Kind::Group { sketch: true, .. } => "Sketch",
             Kind::Group { .. } => "Group",
         }
@@ -616,6 +630,98 @@ impl Object {
     /// A frame or a grid note: an area drawn behind everything that carries what is on it.
     pub fn is_frame(&self) -> bool {
         matches!(self.kind, Kind::Frame { .. } | Kind::Grid { .. })
+    }
+
+    /// A table's column edges (left to right) and row edges (top to bottom), in world space.
+    pub fn table_edges(&self) -> (Vec<f32>, Vec<f32>) {
+        let Kind::Table { cols, rows, .. } = &self.kind else { return (Vec::new(), Vec::new()) };
+        let r = self.rect();
+        let edges = |sizes: &[f32], start: f32, len: f32| {
+            let total: f32 = sizes.iter().sum::<f32>().max(1e-3);
+            let mut e = vec![start];
+            let mut at = start;
+            for s in sizes {
+                at += s / total * len;
+                e.push(at);
+            }
+            e
+        };
+        (edges(cols, r.left(), r.width()), edges(rows, r.top(), r.height()))
+    }
+
+    /// The table cell (row, column) under `p`.
+    pub fn table_cell_at(&self, p: Pos2) -> Option<(usize, usize)> {
+        let (xs, ys) = self.table_edges();
+        let c = xs.windows(2).position(|w| p.x >= w[0] && p.x < w[1])?;
+        let r = ys.windows(2).position(|w| p.y >= w[0] && p.y < w[1])?;
+        Some((r, c))
+    }
+
+    /// A table cell's rect in world space.
+    pub fn table_cell_rect(&self, row: usize, col: usize) -> Rect {
+        let (xs, ys) = self.table_edges();
+        match (xs.get(col..col + 2), ys.get(row..row + 2)) {
+            (Some(x), Some(y)) => Rect::from_min_max(pos2(x[0], y[0]), pos2(x[1], y[1])),
+            _ => self.rect(),
+        }
+    }
+
+    /// Make a table's stored sizes its sizes in world units (after the rect was stretched).
+    pub fn table_settle(&mut self) {
+        let (xs, ys) = self.table_edges();
+        if let Kind::Table { cols, rows, .. } = &mut self.kind {
+            *cols = xs.windows(2).map(|w| w[1] - w[0]).collect();
+            *rows = ys.windows(2).map(|w| w[1] - w[0]).collect();
+        }
+    }
+
+    /// Add a row after `at` (or a column, when `col`), as wide or tall as its neighbour; the table
+    /// grows by that much.
+    pub fn table_insert(&mut self, col: bool, at: usize) {
+        self.table_settle();
+        let Kind::Table { cols, rows, cells, .. } = &mut self.kind else { return };
+        let grow;
+        if col {
+            let at = (at + 1).min(cols.len());
+            grow = cols.get(at.saturating_sub(1)).copied().unwrap_or(120.0);
+            cols.insert(at, grow);
+            for row in cells.iter_mut() {
+                row.insert(at.min(row.len()), String::new());
+            }
+            self.rect[2] += grow;
+        } else {
+            let at = (at + 1).min(rows.len());
+            grow = rows.get(at.saturating_sub(1)).copied().unwrap_or(36.0);
+            rows.insert(at, grow);
+            cells.insert(at.min(cells.len()), vec![String::new(); cols.len()]);
+            self.rect[3] += grow;
+        }
+    }
+
+    /// Remove row `at` (or column `at`, when `col`); the table shrinks by its size. The last row or
+    /// column stays.
+    pub fn table_remove(&mut self, col: bool, at: usize) {
+        self.table_settle();
+        let Kind::Table { cols, rows, cells, .. } = &mut self.kind else { return };
+        if col {
+            if cols.len() <= 1 || at >= cols.len() {
+                return;
+            }
+            self.rect[2] -= cols.remove(at);
+            for row in cells.iter_mut() {
+                if at < row.len() {
+                    row.remove(at);
+                }
+            }
+        } else {
+            if rows.len() <= 1 || at >= rows.len() {
+                return;
+            }
+            self.rect[3] -= rows.remove(at);
+            if at < cells.len() {
+                cells.remove(at);
+            }
+        }
     }
 
     /// A grid note's dot at `d` (column, row), in world space.
@@ -800,6 +906,9 @@ pub struct Board {
     /// Items left out by the calendar's day filter: treated as hidden. Set every frame, never saved.
     #[serde(skip)]
     pub veil: std::collections::HashSet<Id>,
+    /// The Plot panel's own plot (a plot item on the board has its own).
+    #[serde(default)]
+    pub plot: crate::plot::PlotSpec,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]

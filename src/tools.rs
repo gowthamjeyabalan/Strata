@@ -27,10 +27,11 @@ pub enum Tool {
     Text,
     Connect,
     GridNote,
+    Table,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 17] = [
+    pub const ALL: [Tool; 18] = [
         Tool::Select,
         Tool::Hand,
         Tool::Pen,
@@ -48,6 +49,7 @@ impl Tool {
         Tool::Text,
         Tool::Connect,
         Tool::GridNote,
+        Tool::Table,
     ];
 
     pub fn name(self) -> &'static str {
@@ -69,6 +71,7 @@ impl Tool {
             Tool::Text => "Text",
             Tool::Connect => "Connect",
             Tool::GridNote => "Grid note",
+            Tool::Table => "Table",
         }
     }
 
@@ -92,6 +95,7 @@ impl Tool {
             Tool::Text => T,
             Tool::Connect => C,
             Tool::GridNote => G,
+            Tool::Table => J,
         }
     }
 
@@ -179,6 +183,14 @@ pub fn paint_icon(p: &Painter, rect: Rect, tool: Tool, c: Color32, dot: Color32)
         }
         Tool::Rectangle => {
             p.rect_stroke(Rect::from_min_max(at(3.5, 5.0), at(16.5, 15.0)), 1.5 * s, st, egui::StrokeKind::Middle);
+        }
+        Tool::Table => {
+            p.rect_stroke(Rect::from_min_max(at(3.0, 4.0), at(17.0, 16.0)), 1.5 * s, st, egui::StrokeKind::Middle);
+            line(&[(3.0, 8.0), (17.0, 8.0)]);
+            line(&[(3.0, 12.0), (17.0, 12.0)]);
+            line(&[(8.0, 4.0), (8.0, 16.0)]);
+            let head = Rect::from_min_max(at(3.0, 4.0), at(17.0, 8.0));
+            p.rect_filled(head.shrink(1.0 * s), 1.0 * s, dot.gamma_multiply(0.5));
         }
         Tool::GridNote => {
             // Dots, with a line joining two of them.

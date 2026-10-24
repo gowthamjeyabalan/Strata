@@ -154,6 +154,9 @@ pub enum Drag {
     /// Scaling several selected items together by the handles of the box around them. `items` holds
     /// every item moved (with what is inside groups) and its rect and text size at the start.
     Scale { orig: Rect, handle: Handle, items: Vec<(Id, Rect, f32)> },
+    /// Dragging the border after column (or row) `k` of a table. `orig` holds the sizes at the start;
+    /// the last border grows or shrinks the table.
+    TableEdge { id: Id, col: bool, k: usize, start: Pos2, orig: Vec<f32>, rect: Rect },
     /// Drawing a line on a grid note from dot `from` towards `end`.
     GridLine { grid: Id, from: [i32; 2], end: Pos2 },
     /// Moving the lines `lines` of a grid note: within it, onto another, or off it as a sketch.
@@ -254,7 +257,7 @@ impl Editor {
 
     /// Can this item be turned? Not groups, frames or locked items.
     fn rotatable(&self, o: &Object) -> bool {
-        !self.is_locked(o.id) && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. })
+        !self.is_locked(o.id) && !matches!(o.kind, Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. } | Kind::Table { .. } | Kind::Plot { .. })
     }
 
     /// The round handle above a single selected item that turns it.
@@ -510,7 +513,50 @@ impl Editor {
         self.clear_wires();
     }
 
-    /// A new frame, named and numbered after the page's last one, behind everything.
+    /// A table filling `rect`, `cols` across and `rows` down, ready to type in its first cell.
+    fn create_table(&mut self, rect: Rect, cols: u32, rows: u32) {
+        self.mark_changed();
+        let (c, r) = (cols.max(1) as usize, rows.max(1) as usize);
+        let kind = Kind::Table { cols: vec![rect.width() / c as f32; c], rows: vec![rect.height() / r as f32; r], cells: vec![vec![String::new(); c]; r], header: true };
+        let style = Style { font_size: self.style.font_size.min(28.0), ..Style::default() };
+        let id = self.board.add(rect, kind, style);
+        self.selection = vec![id];
+        self.clear_wires();
+        self.start_edit(id);
+        self.editing_cell = Some((0, 0));
+        self.say("Tab moves to the next cell; drag a border to resize a row or column");
+    }
+
+    /// The border of the selected table under `w`: (table, column border, its index). The last border
+    /// on each side counts; the ports' spots are left to the ports.
+    fn table_edge_hit(&self, w: Pos2) -> Option<(Id, bool, usize)> {
+        if self.selection.len() != 1 || self.is_editing() {
+            return None;
+        }
+        let o = self.board.get(self.selection[0]).filter(|o| matches!(o.kind, Kind::Table { .. }) && !self.is_locked(o.id))?;
+        let tol = 4.0 / self.camera.zoom;
+        let r = o.rect();
+        if Side::ALL.iter().any(|s| o.port(*s).distance(w) <= tol * 3.0) || !r.expand(tol).contains(w) {
+            return None;
+        }
+        let (xs, ys) = o.table_edges();
+        if let Some(k) = (1..xs.len()).find(|k| (xs[*k] - w.x).abs() <= tol) {
+            return Some((o.id, true, k));
+        }
+        (1..ys.len()).find(|k| (ys[*k] - w.y).abs() <= tol).map(|k| (o.id, false, k))
+    }
+
+    /// The + beside the selected table that adds a column (at its lower right) or a row (at its bottom
+    /// left), in screen space.
+    fn table_plus(&self) -> Option<(Id, Pos2, Pos2)> {
+        if self.selection.len() != 1 || self.is_editing() {
+            return None;
+        }
+        let o = self.board.get(self.selection[0]).filter(|o| matches!(o.kind, Kind::Table { .. }) && !self.is_locked(o.id))?;
+        let r = self.camera.rect_to_screen(self.canvas_rect.min, o.rect());
+        Some((o.id, pos2(r.right() + 16.0, r.bottom() - 12.0), pos2(r.left() + 12.0, r.bottom() + 16.0)))
+    }
+
     /// A grid note filling `rect`.
     fn create_grid_note(&mut self, rect: Rect) {
         self.mark_changed();
@@ -889,6 +935,27 @@ impl Editor {
                     let ids = self.board.with_descendants(&self.selection);
                     let items = ids.iter().filter_map(|id| self.board.get(*id)).map(|o| (o.id, o.rect(), o.style.font_size)).collect();
                     Drag::Scale { orig: b, handle: h, items }
+                } else if let Some((id, add_col)) = self.table_plus().and_then(|(id, pc, pr)| {
+                    let s = self.camera.to_screen(self.canvas_rect.min, w);
+                    if s.distance(pc) <= 9.0 { Some((id, true)) } else if s.distance(pr) <= 9.0 { Some((id, false)) } else { None }
+                }) {
+                    self.mark_changed();
+                    if let Some(o) = self.board.get_mut(id) {
+                        let n = match &o.kind {
+                            Kind::Table { cols, rows, .. } => if add_col { cols.len() } else { rows.len() },
+                            _ => 0,
+                        };
+                        o.table_insert(add_col, n.saturating_sub(1));
+                    }
+                    Drag::None
+                } else if let Some((id, col, k)) = self.table_edge_hit(w) {
+                    let o = self.board.get_mut(id).unwrap();
+                    o.table_settle();
+                    let orig = match &o.kind {
+                        Kind::Table { cols, rows, .. } => if col { cols.clone() } else { rows.clone() },
+                        _ => Vec::new(),
+                    };
+                    Drag::TableEdge { id, col, k, start: w, orig, rect: o.rect() }
                 } else if let Some(id) = self.radius_handle_hit(w) {
                     Drag::Radius { id }
                 } else if let Some((id, handle)) = self.resize_handle_hit(w) {
@@ -949,7 +1016,7 @@ impl Editor {
                 Some((grid, from)) => Drag::GridLine { grid, from, end: w },
                 None => Drag::Box { start: w, end: w, cols: 1, rows: 1 },
             },
-            Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text | Tool::Frame => Drag::Box { start: w, end: w, cols: 1, rows: 1 },
+            Tool::Rectangle | Tool::Ellipse | Tool::Node | Tool::Text | Tool::Frame | Tool::Table => Drag::Box { start: w, end: w, cols: 1, rows: 1 },
             Tool::Connect => match self.port_hit(w, None) {
                 Some((id, side)) => Drag::Wire { from: id, from_side: Some(side), end: w },
                 None => match self.board.hit(w, tol) {
@@ -1154,6 +1221,30 @@ impl Editor {
             Drag::Wire { end, .. } => *end = w,
             Drag::GridLine { end, .. } => *end = w,
             Drag::GridMove { end, .. } => *end = w,
+            Drag::TableEdge { id, col, k, start, orig, rect } => {
+                let (id, col, k, rect) = (*id, *col, *k, *rect);
+                let d = if col { w.x - start.x } else { w.y - start.y };
+                let min = 16.0;
+                let mut sizes = orig.clone();
+                let mut r = rect;
+                if k < sizes.len() {
+                    // An inner border: the two sides trade space.
+                    let d = d.clamp(min - sizes[k - 1], sizes[k] - min);
+                    sizes[k - 1] += d;
+                    sizes[k] -= d;
+                } else {
+                    // The last border: the table grows or shrinks.
+                    let d = d.max(min - sizes[k - 1]);
+                    sizes[k - 1] += d;
+                    if col { r.max.x += d } else { r.max.y += d }
+                }
+                if let Some(o) = self.board.objects.iter_mut().find(|x| x.id == id) {
+                    o.set_rect(r);
+                    if let Kind::Table { cols, rows, .. } = &mut o.kind {
+                        if col { *cols = sizes } else { *rows = sizes }
+                    }
+                }
+            }
             Drag::Erase { .. } => erase = true,
         }
         if erase {
@@ -1189,7 +1280,7 @@ impl Editor {
                     self.say(format!("Copied and connected {}", crate::editor::plural(joined, "item", "items")));
                 }
             }
-            Drag::Resize { .. } | Drag::Radius { .. } | Drag::Rotate { .. } | Drag::Crop { .. } | Drag::Scale { .. } => self.mark_changed(),
+            Drag::Resize { .. } | Drag::Radius { .. } | Drag::Rotate { .. } | Drag::Crop { .. } | Drag::Scale { .. } | Drag::TableEdge { .. } => self.mark_changed(),
             Drag::Marquee { start, end, add } => {
                 let r = Rect::from_two_pos(start, end);
                 let hidden = self.board.hidden_set();
@@ -1241,6 +1332,10 @@ impl Editor {
                 let r = if self.tool == Tool::Frame { frame_rect(start, end, mods.shift) } else { box_rect(start, end, mods.shift) };
                 if r.width() * zoom < 6.0 && r.height() * zoom < 6.0 {
                     self.click(start, mods);
+                } else if self.tool == Tool::Table {
+                    // Without arrow keys, a box of about 120 by 36 cells.
+                    let (c, rw) = if cols > 1 || rows > 1 { (cols, rows) } else { (((r.width() / 120.0).round() as u32).clamp(1, 12), ((r.height() / 36.0).round() as u32).clamp(1, 40)) };
+                    self.create_table(r, c, rw);
                 } else if cols > 1 || rows > 1 {
                     self.create_grid(r, cols, rows);
                 } else if self.tool == Tool::Frame {
@@ -1382,6 +1477,7 @@ impl Editor {
             // A click makes a 16:9 slide-sized frame.
             Tool::Frame => self.create_frame(Rect::from_center_size(w, vec2(960.0, 540.0))),
             Tool::GridNote => self.create_grid_note(Rect::from_center_size(w, vec2(GRID_SPACING * 16.0, GRID_SPACING * 12.0))),
+            Tool::Table => self.create_table(Rect::from_center_size(w, vec2(360.0, 108.0)), 3, 3),
             Tool::Polyline => self.poly_click(w, mods),
             Tool::Hand | Tool::Line | Tool::Arrow => {}
         }
@@ -1390,6 +1486,13 @@ impl Editor {
     fn double_click(&mut self, w: Pos2) {
         if self.tool == Tool::Polyline {
             self.finish_poly(false);
+            return;
+        }
+        // A plot is changed in the Plot panel.
+        if let Some(id) = self.board.hit(w, self.tol()).filter(|id| matches!(self.board.get(*id).map(|o| &o.kind), Some(Kind::Plot { .. }))) {
+            self.selection = vec![id];
+            self.clear_wires();
+            self.show_plot = true;
             return;
         }
         if let Some(Kind::Note { note }) = self.board.hit(w, self.tol()).and_then(|id| self.board.get(id)).map(|o| o.kind.clone()) {
@@ -1405,6 +1508,9 @@ impl Editor {
         }
         if let Some(id) = self.board.hit(w, self.tol()) {
             self.start_edit(id);
+            if let Some(cell) = self.board.get(id).filter(|o| matches!(o.kind, Kind::Table { .. })).and_then(|o| o.table_cell_at(w)) {
+                self.editing_cell = Some(cell);
+            }
         } else if let Some(wid) = self.wire_hit(w) {
             self.start_wire_edit(wid);
         } else {
@@ -1641,6 +1747,9 @@ impl Editor {
                     Tool::Select if self.radius_handle_hit(w).is_some() || matches!(self.drag, Drag::Radius { .. }) => CursorIcon::ResizeHorizontal,
                     Tool::Select if matches!(self.drag, Drag::Rotate { .. }) || self.rotate_handle().is_some_and(|(_, h)| h.distance(self.camera.to_screen(self.canvas_rect.min, w)) <= 9.0) => CursorIcon::Grab,
                     Tool::Select if self.resize_handle_hit(w).is_some() => self.resize_handle_hit(w).map(|(_, h)| h.cursor()).unwrap_or_default(),
+                    Tool::Select if matches!(self.drag, Drag::TableEdge { col: true, .. }) => CursorIcon::ResizeColumn,
+                    Tool::Select if matches!(self.drag, Drag::TableEdge { col: false, .. }) => CursorIcon::ResizeRow,
+                    Tool::Select if self.table_edge_hit(w).is_some() => if self.table_edge_hit(w).is_some_and(|(_, col, _)| col) { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow },
                     Tool::Select if matches!(self.drag, Drag::Scale { .. }) => if let Drag::Scale { handle, .. } = &self.drag { handle.cursor() } else { CursorIcon::Default },
                     Tool::Select if self.selection_handles().is_some_and(|(_, hs)| { let s = self.camera.to_screen(self.canvas_rect.min, w); hs.iter().any(|(_, q)| (*q - s).abs().max_elem() <= HANDLE_PX * 0.5 + 2.0) }) => {
                         let s = self.camera.to_screen(self.canvas_rect.min, w);
@@ -1812,7 +1921,15 @@ impl Editor {
                 ui.painter().line_segment([r.left_top() - vec2(2.0, 0.0), r.left_bottom() - vec2(2.0, 0.0)], Stroke::new(2.0, p.accent));
             }
             let count = self.board.objects.iter().filter(|o| o.page == pg.id && !o.is_group()).count();
-            let resp = resp.on_hover_text(format!("{}. Double-click to rename; drag to reorder.", crate::editor::plural(count, "item", "items")));
+            // Hovering shows a picture of the page.
+            let pid = pg.id;
+            let resp = resp.on_hover_ui(|ui| {
+                ui.label(egui::RichText::new(format!("{} · {}", short_name(&pg.name), crate::editor::plural(count, "item", "items"))).size(12.0));
+                let (r, _) = ui.allocate_exact_size(vec2(240.0, 150.0), Sense::hover());
+                let ctx = ui.ctx().clone();
+                crate::overview::paint_page(&ctx, ui.painter(), self, pid, r);
+                ui.label(theme::secondary(ui, "Double-click to rename; drag to reorder."));
+            });
             if resp.double_clicked() {
                 self.renaming_page = Some((pg.id, pg.name.clone()));
             } else if resp.clicked() {
@@ -1891,7 +2008,7 @@ impl Editor {
                 continue;
             }
             // A turned item is drawn as usual, then turned (paths turn their own points).
-            let turned = o.rotation.abs() > 1e-4 && !matches!(o.kind, Kind::Path { .. } | Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. });
+            let turned = o.rotation.abs() > 1e-4 && !matches!(o.kind, Kind::Path { .. } | Kind::Group { .. } | Kind::Frame { .. } | Kind::Grid { .. } | Kind::Table { .. } | Kind::Plot { .. });
             let h = if turned { self.draw_rotated(ctx, painter, origin, o, p, tex, self.editing == Some(id)) } else { self.draw_object(painter, origin, o, p, tex, self.editing == Some(id)) };
             if let Some(h) = h {
                 text_heights.push((id, h));
@@ -1900,6 +2017,21 @@ impl Editor {
         for (id, h) in text_heights {
             if let Some(o) = self.board.get_mut(id) {
                 o.rect[3] = h;
+            }
+        }
+        let fits = std::mem::take(&mut *self.table_fit.borrow_mut());
+        for (id, row, need) in fits {
+            if let Some(o) = self.board.get_mut(id) {
+                let have = o.table_cell_rect(row, 0).height();
+                if need > have + 0.5 {
+                    o.table_settle();
+                    if let Kind::Table { rows, .. } = &mut o.kind {
+                        if let Some(h) = rows.get_mut(row) {
+                            *h += need - have;
+                        }
+                    }
+                    o.rect[3] += need - have;
+                }
             }
         }
         // Wires on top of objects so they are never hidden behind a group or an image.
@@ -2162,11 +2294,11 @@ impl Editor {
                 }
             }
             Kind::Grid { lines, fills, .. } => {
-                // A slightly white, see-through panel with a dotted, rounded edge, its dots, and the lines
-                // drawn on it.
+                // A slightly whiter panel than the board, solid so the board's own dots do not show
+                // through, with a dotted, rounded edge, its dots, and the lines drawn on it.
                 let fill = match o.style.fill_color {
                     Some(c) if o.style.fill => fade(c.color(p)),
-                    _ => fade(Color32::from_white_alpha(if p.canvas.r() < 128 { 16 } else { 150 })),
+                    _ => fade(p.canvas.lerp_to_gamma(Color32::WHITE, if p.canvas.r() < 128 { 0.07 } else { 0.6 })),
                 };
                 let radius = (r.width().min(r.height()) * 0.08).min(28.0 * z);
                 painter.rect_filled(r, CornerRadius::same(radius.min(255.0) as u8), fill);
@@ -2222,6 +2354,59 @@ impl Editor {
                 if self.presenting.is_none() && !editing && !o.label.is_empty() {
                     let color = if self.selection.contains(&o.id) { p.accent } else { p.text_secondary };
                     painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, &o.label, FontId::proportional(12.0), color);
+                }
+            }
+            Kind::Plot { plot } => crate::plot::paint_node(painter, r, plot, p, z, self.selection.contains(&o.id)),
+            Kind::Table { cells, header, .. } => {
+                // A card with ruled cells, a tinted heading row, and each cell's text wrapped in it.
+                let fill = match o.style.fill_color {
+                    Some(c) if o.style.fill => fade(c.color(p)),
+                    _ => fade(p.window_fill),
+                };
+                let radius = CornerRadius::same((6.0 * z).clamp(1.0, 12.0) as u8);
+                painter.rect_filled(r, radius, fill);
+                let (xs, ys) = o.table_edges();
+                let sx = |x: f32| self.camera.to_screen(origin, pos2(x, 0.0)).x;
+                let sy = |y: f32| self.camera.to_screen(origin, pos2(0.0, y)).y;
+                let rule = if o.style.ink == board::Ink::Auto { fade(p.window_stroke) } else { ink.gamma_multiply(0.6) };
+                if *header && ys.len() > 1 {
+                    let head = Rect::from_min_max(r.min, pos2(r.max.x, sy(ys[1])));
+                    painter.rect_filled(head, CornerRadius { nw: radius.nw, ne: radius.ne, sw: 0, se: 0 }, fade(p.accent.gamma_multiply(0.14)));
+                }
+                for x in &xs[1..xs.len().saturating_sub(1)] {
+                    painter.line_segment([pos2(sx(*x), r.top()), pos2(sx(*x), r.bottom())], Stroke::new(1.0, rule));
+                }
+                for y in &ys[1..ys.len().saturating_sub(1)] {
+                    painter.line_segment([pos2(r.left(), sy(*y)), pos2(r.right(), sy(*y))], Stroke::new(1.0, rule));
+                }
+                painter.rect_stroke(r, radius, Stroke::new(1.0, if o.style.ink == board::Ink::Auto { fade(p.window_stroke) } else { ink }), StrokeKind::Inside);
+                if font.size >= 2.0 {
+                    let text = fade(if o.style.ink == board::Ink::Auto { p.text } else { ink });
+                    let k = font.size / (o.style.font_size * z).max(0.01);
+                    for (ri, row) in cells.iter().enumerate() {
+                        for (ci, cell) in row.iter().enumerate() {
+                            if cell.is_empty() || (editing && self.editing_cell == Some((ri, ci))) || ri + 1 >= ys.len() || ci + 1 >= xs.len() {
+                                continue;
+                            }
+                            let cr = Rect::from_min_max(pos2(sx(xs[ci]), sy(ys[ri])), pos2(sx(xs[ci + 1]), sy(ys[ri + 1]))).shrink2(vec2(7.0 * z, 5.0 * z));
+                            let f = if *header && ri == 0 { FontId::new(font.size, theme::semibold_family()) } else { font.clone() };
+                            let g = painter.layout(cell.clone(), f, text, (cr.width() * k).max(8.0));
+                            // A row too short for its text grows to fit (after drawing).
+                            let need = g.size().y / (z * k).max(1e-4) + 10.0;
+                            if font.size >= 4.0 && need > ys[ri + 1] - ys[ri] + 0.5 {
+                                self.table_fit.borrow_mut().push((o.id, ri, need));
+                            }
+                            painter.with_clip_rect(cr.expand(1.0).intersect(painter.clip_rect())).galley(cr.min, g, text);
+                        }
+                    }
+                }
+                // While selected: the + that adds a column (lower right) and a row (bottom left).
+                if self.selection == [o.id] && !editing && !self.is_locked(o.id) {
+                    for at in [pos2(r.right() + 16.0, r.bottom() - 12.0), pos2(r.left() + 12.0, r.bottom() + 16.0)] {
+                        painter.circle(at, 8.0, p.bg_control, Stroke::new(1.0, p.accent));
+                        painter.line_segment([at - vec2(4.0, 0.0), at + vec2(4.0, 0.0)], Stroke::new(1.5, p.text));
+                        painter.line_segment([at - vec2(0.0, 4.0), at + vec2(0.0, 4.0)], Stroke::new(1.5, p.text));
+                    }
                 }
             }
             Kind::Note { note } => {
@@ -2590,6 +2775,12 @@ impl Editor {
             let (area, font, color, center) = match &o.kind {
                 Kind::Text => (Rect::from_min_size(r.min, vec2(r.width().max(40.0), r.height().max(20.0))), FontId::proportional(size), ink, false),
                 Kind::Shape { .. } => (r.shrink2(vec2(8.0 * z, 4.0 * z)), FontId::proportional(size), p.text, true),
+                Kind::Table { header, .. } => {
+                    let (ri, ci) = self.editing_cell.unwrap_or((0, 0));
+                    let cr = self.camera.rect_to_screen(origin, o.table_cell_rect(ri, ci)).shrink2(vec2(7.0 * z, 5.0 * z));
+                    let f = if *header && ri == 0 { FontId::new(size, theme::semibold_family()) } else { FontId::proportional(size) };
+                    (cr, f, if o.style.ink == board::Ink::Auto { p.text } else { ink }, false)
+                }
                 Kind::Frame { .. } | Kind::Grid { .. } => (Rect::from_min_size(r.left_top() - vec2(0.0, 22.0), vec2(r.width().clamp(120.0, 320.0), 18.0)), FontId::proportional(12.0), p.text, false),
                 Kind::Group { sketch: false, .. } => {
                     let size = quantize_font(board::group_font(o.rect().width()) * z);
@@ -2598,12 +2789,22 @@ impl Editor {
                 }
                 _ => (Rect::from_center_size(pos2(r.center().x, r.bottom() + 16.0), vec2(r.width().max(160.0), 24.0)), FontId::proportional(13.0), p.text, true),
             };
-            (("obj", id), area, font, color, center, o.label.clone())
+            let label = match (&o.kind, self.editing_cell.unwrap_or((0, 0))) {
+                (Kind::Table { cells, .. }, (ri, ci)) => cells.get(ri).and_then(|row| row.get(ci)).cloned().unwrap_or_default(),
+                _ => o.label.clone(),
+            };
+            (("obj", id), area, font, color, center, label)
         } else {
             return;
         };
 
-        let edit_id = ui.make_persistent_id(key);
+        let table = self.editing.filter(|id| matches!(self.board.get(*id).map(|o| &o.kind), Some(Kind::Table { .. })));
+        if table.is_some() && self.editing_cell.is_none() {
+            self.editing_cell = Some((0, 0));
+        }
+        // Tab and Shift+Tab move between cells (Tab past the last cell adds a row).
+        let tab = if table.is_some() { ui.input_mut(|i| if i.consume_key(Modifiers::SHIFT, Key::Tab) { Some(false) } else if i.consume_key(Modifiers::NONE, Key::Tab) { Some(true) } else { None }) } else { None };
+        let edit_id = ui.make_persistent_id(key).with(self.editing_cell);
         // Text boxes and shapes' text have a formatting bar while they are typed.
         let fmt = self.editing.filter(|_| self.editing_wire.is_none()).and_then(|id| self.board.get(id)).filter(|o| matches!(o.kind, Kind::Text | Kind::Shape { .. })).map(|o| (o.style, matches!(o.kind, Kind::Text)));
         let mut bar_rect = Rect::NOTHING;
@@ -2671,6 +2872,49 @@ impl Editor {
         if let Some(wid) = self.editing_wire {
             if let Some(w) = self.board.wire_mut(wid) {
                 w.label = label.replace('\n', " ");
+            }
+        } else if let (Some(id), Some((ri, ci))) = (table, self.editing_cell) {
+            // The cell's text; its row grows to fit what is typed.
+            self.table_cell = Some((id, ri, ci));
+            if let Some(o) = self.board.get_mut(id) {
+                let need = out.rect.height() / z + 10.0;
+                let have = o.table_cell_rect(ri, ci).height();
+                if need > have + 0.5 {
+                    o.table_settle();
+                    if let Kind::Table { rows, .. } = &mut o.kind {
+                        if let Some(h) = rows.get_mut(ri) {
+                            *h += need - have;
+                        }
+                    }
+                    o.rect[3] += need - have;
+                }
+                if let Kind::Table { cells, cols, .. } = &mut o.kind {
+                    while cells.len() <= ri {
+                        cells.push(vec![String::new(); cols.len()]);
+                    }
+                    let row = &mut cells[ri];
+                    while row.len() <= ci {
+                        row.push(String::new());
+                    }
+                    row[ci] = label;
+                }
+            }
+            if let Some(forward) = tab {
+                let (nr, nc) = match self.board.get(id).map(|o| &o.kind) {
+                    Some(Kind::Table { cols, rows, .. }) => (rows.len(), cols.len()),
+                    _ => (1, 1),
+                };
+                let at = ri * nc + ci;
+                let next = if forward { at + 1 } else { at.saturating_sub(1) };
+                if forward && next >= nr * nc {
+                    self.mark_changed();
+                    if let Some(o) = self.board.get_mut(id) {
+                        o.table_insert(false, nr - 1);
+                    }
+                }
+                self.editing_cell = Some((next / nc, next % nc));
+                self.edit_focus = true;
+                return;
             }
         } else if let Some(id) = self.editing {
             if let Some(o) = self.board.get_mut(id) {

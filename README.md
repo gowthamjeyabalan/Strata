@@ -25,6 +25,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 **Draw and place**
 - Pen, pencil, marker and highlighter, each with its own width from hairline (0.25) to very thick (1000). Strokes are smoothed as you draw. As in Photoshop, Shift+click draws a straight stroke from where the last one ended.
 - Lines, arrows, rectangles, ellipses and text. While typing, a small bar sets bold, italic, underline, size, colour and alignment (text boxes and the text in shapes).
+- Tables (J): drag a box (the arrow keys set the rows and columns while dragging) or click. Double-click a cell to type, Tab moves to the next one (past the last cell it adds a row), rows grow to fit their text, and dragging a border resizes a row or column. The + beside a selected table adds a column or a row; Properties adds and removes them next to the cell typed in last, switches the heading row, and evens out the sizes.
 - Grid notes (G): a dotted area like a frame, full of dots; drag from dot to dot to draw straight lines on it. Click a drawing to select it (the lines joined to the one clicked; Alt+click for one line), fill a closed shape, and drag it along the dots, onto another grid, or off the grid, where it becomes a sketch (a closed shape becomes a filled outline). Straight lines dropped onto a grid snap to its dots and join it again.
 - Polylines: click to add corners, straight or as a smooth curve. Click the first point again to close the shape and fill it.
 - Images by drag and drop from Explorer, Ctrl+V (including screenshots) or Ctrl+I.
@@ -55,11 +56,16 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Markdown notes: headings, bold, italic, strikethrough, code, quotes, lists, tasks you can tick, tables, web links and `[[Name]]` links to other notes or items.
 - Place a note on the board as a card: it can be resized, scrolls inside itself, and connects, groups and layers like any item. The same note can have several cards.
 - Pasting markdown or dropping `.md` files onto the window makes notes.
+- Export a note as a `.md` file from its tab, or every note (or the ones picked) at once with Export… in the Notes list: one file per note, folders as subfolders, and pictures in an `images` folder beside them.
 - Pictures in notes: `![name](path)` on a line of its own, Insert image… in a note's tab, or Ctrl+V of a screenshot or of images copied on the board.
 - Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names; a link to a note that does not exist yet shows paler, and following it (a click when reading, Ctrl+click when writing) makes that note and opens it. Dotted lines join the cards of linked notes on the board (View > Links between note cards).
 
+**Plots**
+- A Plot panel beside the board: type equations on the left and see them graphed on the right. `y = …` (or just an expression in x), `r = …` (polar, in θ), `(x(t), y(t))` or `x = …, y = …` (parametric), `x = 3` for a vertical line, and `a = 2` to set a constant. Any other letter is a constant with a slider. Click a curve's dot to hide it; drag the graph to move it and use the wheel to zoom.
+- Place on board turns the plot into a live item that redraws from its equations; select it to change it in the panel, or double-click it to bring the panel forward.
+
 **Pages, frames and presenting**
-- Several pages in one board, as a row of buttons under the board that scrolls sideways (mouse wheel or the arrows) when there are many; ☰ lists them all, and dragging a page button reorders the pages. Each page has its own items; notes are shared by all pages.
+- Several pages in one board, as a row of buttons under the board that scrolls sideways (mouse wheel or the arrows) when there are many; ☰ lists them all, dragging a page button reorders the pages, and hovering one shows a small picture of that page. Each page has its own items; notes are shared by all pages.
 - Frames mark named areas of a page (the Frame tool, F; Shift keeps 16:9) and carry what is inside them when moved. The Frames panel lists them in slide order.
 - Present (F5) shows the frames full screen one by one; arrow keys or a click move on, Esc returns.
 
@@ -104,9 +110,9 @@ These are the defaults; every tool and most commands can be given other keys in 
 | Ctrl+0, Shift+1, Shift+2 | Actual size, zoom to fit, zoom to the selection |
 | M | Show or hide the Overview |
 | Ctrl+E | Export an image |
-| Ctrl+K | Search everything, run a command |
+| Ctrl+K | Command menu: search everything, run a command (Settings > Keyboard shortcuts changes the key) |
 | Ctrl+, | Settings |
-| F, G, F5 | Frame tool, grid note tool, present |
+| F, G, J, F5 | Frame tool, grid note tool, table tool, present |
 | Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline (while typing) |
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | New, open, save, save as |
 

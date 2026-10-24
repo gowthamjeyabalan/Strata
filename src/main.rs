@@ -19,6 +19,7 @@ mod radial;
 mod search;
 mod settings;
 mod panels;
+mod plot;
 mod shapes;
 mod snap;
 mod theme;

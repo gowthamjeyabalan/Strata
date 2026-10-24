@@ -42,7 +42,7 @@ impl Action {
             Action::Save => "Save".into(),
             Action::SaveAs => "Save as".into(),
             Action::Export => "Export image".into(),
-            Action::Search => "Search everything".into(),
+            Action::Search => "Command menu (search everything)".into(),
             Action::Settings => "Settings".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
@@ -110,11 +110,12 @@ impl Combo {
 /// Every action that has a shortcut, in the order Settings lists them, by section.
 pub fn sections() -> Vec<(&'static str, Vec<Action>)> {
     vec![
+        ("Command menu", vec![Action::Search]),
         ("Tools", Tool::ALL.into_iter().map(Action::Tool).collect()),
         ("File", vec![Action::NewBoard, Action::Open, Action::Save, Action::SaveAs, Action::Export, Action::Settings]),
         ("Edit", vec![Action::Undo, Action::Redo, Action::SelectAll, Action::Duplicate, Action::Lock, Action::Group, Action::Ungroup, Action::BringFront, Action::SendBack]),
         ("Add", vec![Action::AddItem, Action::InsertImage]),
-        ("View", vec![Action::Search, Action::ZoomFit, Action::ZoomSelection, Action::ActualSize, Action::Overview, Action::Present]),
+        ("View", vec![Action::ZoomFit, Action::ZoomSelection, Action::ActualSize, Action::Overview, Action::Present]),
     ]
 }
 

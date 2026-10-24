@@ -20,6 +20,7 @@ pub struct Snapshot {
     pub notes: Vec<Note>,
     pub folders: Vec<Folder>,
     pub pages: Vec<Page>,
+    pub plot: crate::plot::PlotSpec,
 }
 
 impl Snapshot {
@@ -39,6 +40,7 @@ impl Snapshot {
             notes: b.notes.clone(),
             folders: b.folders.clone(),
             pages: b.pages.clone(),
+            plot: b.plot.clone(),
         }
     }
 
@@ -54,6 +56,7 @@ impl Snapshot {
             folders: self.folders.clone(),
             pages: self.pages.clone(),
             veil: Default::default(),
+            plot: self.plot.clone(),
         }
     }
 

@@ -475,6 +475,56 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         }
     }
 
+    if let (true, Kind::Table { cols, rows, header, .. }) = (single, &o.kind) {
+        theme::heading(ui, "TABLE");
+        let (nc, nr) = (cols.len(), rows.len());
+        // Rows and columns go next to the cell typed in last, or at the end.
+        let (cr, cc) = match ed.table_cell {
+            Some((t, r, c)) if t == o.id && r < nr && c < nc => (r, c),
+            _ => (nr - 1, nc - 1),
+        };
+        let at_cell = matches!(ed.table_cell, Some((t, r, c)) if t == o.id && r < nr && c < nc);
+        ui.label(theme::secondary(ui, if at_cell { format!("{nr} rows, {nc} columns. Changes go beside row {}, column {} (the cell typed in last).", cr + 1, cc + 1) } else { format!("{nr} rows, {nc} columns. Double-click a cell to type; Tab moves on. Drag a border to resize.") }));
+        let id = o.id;
+        let mut act: Option<(bool, bool, usize)> = None;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Add row").on_hover_text("Below the current row").clicked() {
+                act = Some((true, false, cr));
+            }
+            if ui.button("Add column").on_hover_text("Right of the current column").clicked() {
+                act = Some((true, true, cc));
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui.add_enabled(nr > 1, egui::Button::new("Remove row")).clicked() {
+                act = Some((false, false, cr));
+            }
+            if ui.add_enabled(nc > 1, egui::Button::new("Remove column")).clicked() {
+                act = Some((false, true, cc));
+            }
+        });
+        if let Some((add, col, at)) = act {
+            ed.mark_changed();
+            if let Some(t) = ed.board.get_mut(id) {
+                if add { t.table_insert(col, at) } else { t.table_remove(col, at) }
+            }
+        }
+        let mut h = *header;
+        if ui.switch(&mut h, "Heading row").changed() {
+            ed.mark_changed();
+            if let Some(Kind::Table { header, .. }) = ed.board.get_mut(id).map(|x| &mut x.kind) {
+                *header = h;
+            }
+        }
+        if ui.button("Even out the sizes").on_hover_text("Make every column as wide, and every row as tall, as the others").clicked() {
+            ed.mark_changed();
+            if let Some(Kind::Table { cols, rows, .. }) = ed.board.get_mut(id).map(|x| &mut x.kind) {
+                let (w, hh) = (cols.iter().sum::<f32>() / nc as f32, rows.iter().sum::<f32>() / nr as f32);
+                cols.iter_mut().for_each(|c| *c = w);
+                rows.iter_mut().for_each(|r| *r = hh);
+            }
+        }
+    }
     if let (true, Kind::Grid { spacing, lines, .. }) = (single, &o.kind) {
         theme::heading(ui, "GRID");
         ui.label(theme::secondary(ui, "Drag from dot to dot to draw a line; the eraser takes lines off. New lines take the colour and width set for drawing."));
@@ -1328,6 +1378,15 @@ pub fn notes_ui(ui: &mut Ui, ed: &mut Editor) {
         if ui.button("New folder").clicked() {
             ed.add_folder();
         }
+        // The picked notes, or all of them, as markdown files in a folder.
+        let picked = ed.notes_sel.iter().filter(|id| ed.board.note(**id).is_some()).count();
+        let tip = if picked > 0 { format!("Save the {} picked as .md files in a folder", plural(picked, "note", "notes")) } else { "Save every note as a .md file in a folder (subfolders for your folders)".to_owned() };
+        if ui.add_enabled(!ed.board.notes.is_empty(), egui::Button::new("Export…")).on_hover_text(tip).clicked() {
+            if let Some(dir) = rfd::FileDialog::new().set_title("Export notes to a folder").pick_folder() {
+                let ids: Vec<Id> = if picked > 0 { ed.notes_sel.clone() } else { ed.board.notes.iter().map(|n| n.id).collect() };
+                ed.export_notes(&ids, &dir);
+            }
+        }
     });
     ui.add(egui::TextEdit::singleline(&mut ed.note_query).hint_text("Search notes").desired_width(f32::INFINITY));
     ui.add_space(6.0);
@@ -1427,6 +1486,12 @@ pub fn note_view(ui: &mut Ui, ed: &mut Editor, nid: Id) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Delete").on_hover_text(if cards == 0 { "Delete the note" } else { "Delete the note and its cards" }).clicked() {
                 ed.delete_notes(&[nid]);
+            }
+            if ui.button("Export .md…").on_hover_text("Save the note as a markdown file (its pictures go in an images folder beside it)").clicked() {
+                let title = ed.board.note(nid).map(|n| n.title()).unwrap_or_default();
+                if let Some(path) = rfd::FileDialog::new().add_filter("Markdown", &["md"]).set_file_name(format!("{}.md", title.replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "-"))).save_file() {
+                    ed.export_note(nid, &path);
+                }
             }
             if ui.button("Insert image…").on_hover_text("Put a picture in the note (it is kept in the board)").clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff"]).pick_file() {

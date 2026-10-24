@@ -14,6 +14,14 @@ use std::time::Instant;
 /// Written to the system clipboard when objects are copied, so a paste knows to use the internal copy.
 const CLIPBOARD_MARKER: &str = "overlay:objects";
 
+/// `name` made safe for a file name on Windows.
+fn safe_file_name(name: &str) -> String {
+    let s: String = name.chars().map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '-' } else { c }).collect();
+    let s = s.trim().trim_end_matches('.').to_owned();
+    let s: String = s.chars().take(80).collect();
+    if s.is_empty() { "Untitled note".to_owned() } else { s }
+}
+
 /// What the eyedropper's colour goes to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pick {
@@ -125,6 +133,8 @@ pub struct Editor {
     pub(crate) note_scroll: HashMap<Id, f32>,
     /// Each note card as last drawn: content height (world units) and what can be clicked (screen).
     pub(crate) note_view: std::cell::RefCell<HashMap<Id, (f32, Vec<(Rect, crate::markdown::Target)>)>>,
+    /// Table rows found too short for their text while drawing: (table, row, height needed).
+    pub(crate) table_fit: std::cell::RefCell<Vec<(Id, usize, f32)>>,
     /// A web link clicked in a note, to open.
     pub(crate) open_url: Option<String>,
     /// Calendar: the month showing (its first day); none is this month.
@@ -151,6 +161,12 @@ pub struct Editor {
     pub comments_open: Option<Id>,
     pub comment_draft: String,
     pub(crate) edit_focus: bool,
+    /// Bring the Plot panel forward (a plot item was double-clicked).
+    pub show_plot: bool,
+    /// The table cell (row, column) being typed in, while a table is edited.
+    pub editing_cell: Option<(usize, usize)>,
+    /// The table and cell typed in last: where Properties adds and removes rows and columns.
+    pub table_cell: Option<(Id, usize, usize)>,
     pub(crate) edit_rect: Option<Rect>,
     pub(crate) drag: Drag,
     pub(crate) swallow: bool,
@@ -219,6 +235,7 @@ impl Default for Editor {
             renaming_folder: None,
             note_scroll: HashMap::new(),
             note_view: Default::default(),
+            table_fit: Default::default(),
             open_url: None,
             cal_month: None,
             cal_days: Vec::new(),
@@ -233,6 +250,9 @@ impl Default for Editor {
             comments_open: None,
             comment_draft: String::new(),
             edit_focus: false,
+            editing_cell: None,
+            show_plot: false,
+            table_cell: None,
             edit_rect: None,
             drag: Drag::None,
             swallow: false,
@@ -469,6 +489,77 @@ impl Editor {
         self.board.images.insert(id, ImageAsset { bytes: Arc::new(png), size: [img.width as u32, img.height as u32] });
         self.mark_changed();
         Some(format!("![pasted](image:{id})"))
+    }
+
+    /// A note's text for a `.md` file in `dir`: pictures kept in the board are written into
+    /// `dir/images` and linked from there.
+    fn note_for_file(&self, text: &str, dir: &Path) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(k) = rest.find("](image:") {
+            let (before, after) = rest.split_at(k + 2);
+            let end = after.find(')').unwrap_or(after.len());
+            let id: Option<Id> = after["image:".len()..end].trim().parse().ok();
+            out.push_str(before);
+            match id.and_then(|id| self.board.images.get(&id).map(|a| (id, a))) {
+                Some((id, a)) => {
+                    let ext = image::guess_format(&a.bytes).ok().and_then(|f| f.extensions_str().first().copied()).unwrap_or("png");
+                    let name = format!("image-{id}.{ext}");
+                    let _ = std::fs::create_dir_all(dir.join("images"));
+                    let _ = std::fs::write(dir.join("images").join(&name), a.bytes.as_slice());
+                    out.push_str(&format!("images/{name}"));
+                }
+                None => out.push_str(&after[..end]),
+            }
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Save one note as a markdown file at `path`.
+    pub fn export_note(&mut self, id: Id, path: &Path) {
+        let Some(n) = self.board.note(id) else { return };
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let text = self.note_for_file(&n.text, dir);
+        match std::fs::write(path, text) {
+            Ok(()) => self.say(format!("Exported {}", path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())),
+            Err(e) => self.say(format!("Could not export the note: {e}")),
+        }
+    }
+
+    /// Save notes `ids` as markdown files in `dir`, one per note, in subfolders named after their
+    /// folders. Names that clash get a number.
+    pub fn export_notes(&mut self, ids: &[Id], dir: &Path) {
+        let mut used: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+        let mut done = 0;
+        let mut failed = None;
+        for id in ids {
+            let Some(n) = self.board.note(*id) else { continue };
+            let folder = self.board.folders.iter().find(|f| f.id == n.folder).map(|f| safe_file_name(&f.name));
+            let sub = match &folder {
+                Some(f) => dir.join(f),
+                None => dir.to_path_buf(),
+            };
+            let base = safe_file_name(&n.title());
+            let mut path = sub.join(format!("{base}.md"));
+            let mut k = 2;
+            while used.contains(&path) || path.exists() {
+                path = sub.join(format!("{base} {k}.md"));
+                k += 1;
+            }
+            used.insert(path.clone());
+            let _ = std::fs::create_dir_all(&sub);
+            let text = self.note_for_file(&n.text, &sub);
+            match std::fs::write(&path, text) {
+                Ok(()) => done += 1,
+                Err(e) => failed = Some(e.to_string()),
+            }
+        }
+        match failed {
+            Some(e) => self.say(format!("Exported {}; some could not be written: {e}", plural(done, "note", "notes"))),
+            None => self.say(format!("Exported {} to {}", plural(done, "note", "notes"), dir.display())),
+        }
     }
 
     /// Is there a note or an item called `name` (what a `[[Name]]` link leads to)?
@@ -945,6 +1036,7 @@ impl Editor {
         }
         let Some(id) = self.editing.take() else { return };
         self.edit_rect = None;
+        self.editing_cell = None;
         let empty_text = self.board.get(id).is_some_and(|o| matches!(o.kind, Kind::Text) && o.label.trim().is_empty());
         if empty_text {
             self.board.remove(&[id]);
