@@ -25,7 +25,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 **Draw and place**
 - Pen, pencil, marker and highlighter, each with its own width from hairline (0.25) to very thick (1000). Strokes are smoothed as you draw. As in Photoshop, Shift+click draws a straight stroke from where the last one ended.
 - Lines, arrows, rectangles, ellipses and text. While typing, a small bar sets bold, italic, underline, size, colour and alignment (text boxes and the text in shapes).
-- Grid notes (G): a dotted area like a frame, full of dots; drag from dot to dot to draw straight lines on it.
+- Grid notes (G): a dotted area like a frame, full of dots; drag from dot to dot to draw straight lines on it. Click a drawing to select it (the lines joined to the one clicked; Alt+click for one line), fill a closed shape, and drag it along the dots, onto another grid, or off the grid, where it becomes a sketch (a closed shape becomes a filled outline). Straight lines dropped onto a grid snap to its dots and join it again.
 - Polylines: click to add corners, straight or as a smooth curve. Click the first point again to close the shape and fill it.
 - Images by drag and drop from Explorer, Ctrl+V (including screenshots) or Ctrl+I.
 - Eleven flowchart shapes: empty node, process, decision, start or end, input or output, document, database, subprocess, manual input, connector and note.
@@ -59,7 +59,7 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Backlinks: a note's tab lists the notes that link to it and those that mention it. Typing `[[` suggests note names; a link to a note that does not exist yet shows paler, and following it (a click when reading, Ctrl+click when writing) makes that note and opens it. Dotted lines join the cards of linked notes on the board (View > Links between note cards).
 
 **Pages, frames and presenting**
-- Several pages in one board, as a row of buttons under the board. Each page has its own items; notes are shared by all pages.
+- Several pages in one board, as a row of buttons under the board that scrolls sideways (mouse wheel or the arrows) when there are many; ☰ lists them all, and dragging a page button reorders the pages. Each page has its own items; notes are shared by all pages.
 - Frames mark named areas of a page (the Frame tool, F; Shift keeps 16:9) and carry what is inside them when moved. The Frames panel lists them in slide order.
 - Present (F5) shows the frames full screen one by one; arrow keys or a click move on, Esc returns.
 

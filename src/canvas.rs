@@ -156,6 +156,8 @@ pub enum Drag {
     Scale { orig: Rect, handle: Handle, items: Vec<(Id, Rect, f32)> },
     /// Drawing a line on a grid note from dot `from` towards `end`.
     GridLine { grid: Id, from: [i32; 2], end: Pos2 },
+    /// Moving the lines `lines` of a grid note: within it, onto another, or off it as a sketch.
+    GridMove { grid: Id, lines: Vec<usize>, start: Pos2, end: Pos2 },
     /// Cropping an image: `full` is the whole picture in world space.
     Crop { id: Id, orig: Rect, handle: Handle, full: Rect },
     Marquee { start: Pos2, end: Pos2, add: bool },
@@ -512,13 +514,211 @@ impl Editor {
     /// A grid note filling `rect`.
     fn create_grid_note(&mut self, rect: Rect) {
         self.mark_changed();
-        let id = self.board.add(rect, Kind::Grid { spacing: GRID_SPACING, lines: Vec::new() }, Style::default());
+        let id = self.board.add(rect, Kind::Grid { spacing: GRID_SPACING, lines: Vec::new(), fills: Vec::new() }, Style::default());
         if let Some(o) = self.board.get_mut(id) {
             o.label = "Grid".to_owned();
         }
         self.selection = vec![id];
         self.clear_wires();
         self.say("Drag from dot to dot to draw lines on it");
+    }
+
+    /// The line on a grid note under `w` (the topmost grid note): the note and the line's place.
+    fn grid_line_hit(&self, w: Pos2) -> Option<(Id, usize)> {
+        let hidden = self.board.hidden_set();
+        let tol = self.tol();
+        self.board.objects.iter().rev().filter(|o| matches!(o.kind, Kind::Grid { .. }) && !hidden.contains(&o.id) && !self.is_locked(o.id) && o.rect().contains(w)).find_map(|o| {
+            let Kind::Grid { lines, .. } = &o.kind else { return None };
+            let (cols, rows) = o.grid_size();
+            let inside = |d: [i32; 2]| (1..=cols).contains(&d[0]) && (1..=rows).contains(&d[1]);
+            lines.iter().position(|l| inside(l.a) && inside(l.b) && board::dist_to_segment(w, o.grid_dot(l.a), o.grid_dot(l.b)) <= tol + l.width * 0.5).map(|i| (o.id, i))
+        })
+    }
+
+    /// A press on a grid note's drawing: picks it (the lines joined to the one under `w`, or with Alt
+    /// that line alone) and returns what to move. A press on a dot of a drawing that is not selected
+    /// draws a new line instead.
+    fn grid_pick(&mut self, w: Pos2, alt: bool) -> Option<(Id, Vec<usize>)> {
+        let (g, i) = self.grid_line_hit(w)?;
+        if let Some((sg, sel)) = &self.grid_sel {
+            if *sg == g && sel.contains(&i) {
+                return Some((g, sel.clone()));
+            }
+        }
+        if self.grid_dot_hit(w).is_some() {
+            return None;
+        }
+        let lines = match self.board.get(g).map(|o| &o.kind) {
+            Some(Kind::Grid { lines, .. }) if !alt => board::grid_shape(lines, i),
+            _ => vec![i],
+        };
+        self.finish_edit();
+        self.selection.clear();
+        self.clear_wires();
+        self.grid_sel = Some((g, lines.clone()));
+        Some((g, lines))
+    }
+
+    /// The grid note to drop onto at `w`: the topmost one under it that can take lines.
+    fn grid_at(&self, w: Pos2, except: &[Id]) -> Option<Id> {
+        let hidden = self.board.hidden_set();
+        self.board.objects.iter().rev().find(|o| matches!(o.kind, Kind::Grid { .. }) && !hidden.contains(&o.id) && !self.is_locked(o.id) && !except.contains(&o.id) && o.rect().contains(w)).map(|o| o.id)
+    }
+
+    /// A straight-segment item through world points `pts` (closed back to the first when `closed`).
+    fn add_line_item(&mut self, pts: &[Pos2], closed: bool, style: Style, layer: Id, page: Id) -> Id {
+        let b = Rect::from_points(pts);
+        let local = pts.iter().map(|q| [q.x - b.min.x, q.y - b.min.y]).collect();
+        let id = self.board.add(b, Kind::Path { points: local, base: [b.width(), b.height()], arrow: false, brush: Brush::default(), closed, curved: false }, style);
+        if let Some(o) = self.board.get_mut(id) {
+            o.layer = layer;
+            o.page = page;
+        }
+        id
+    }
+
+    /// Lines dragged from grid note `g` by `delta`: moved on it, onto another grid note under `end`
+    /// (snapped to its dots), or off any grid as one sketch (a closed shape as one outline).
+    fn drop_grid_lines(&mut self, g: Id, idx: Vec<usize>, delta: Vec2, end: Pos2) {
+        let Some(src) = self.board.get(g).cloned() else { return };
+        let target = self.grid_at(end, &[]);
+        self.mark_changed();
+        let (lines, fills) = self.take_grid_lines(g, &idx);
+        let Some(t) = target.and_then(|t| self.board.get(t)).cloned() else {
+            // Off the grid: a sketch (or a closed outline) that is an item like any other.
+            let world = |d: [i32; 2]| src.grid_dot(d) + delta;
+            let all: Vec<usize> = (0..lines.len()).collect();
+            let first = lines[0];
+            let mut style = Style { ink: first.ink, width: first.width, ..Style::default() };
+            let closed_shape = board::grid_loop(&lines, &all).is_some();
+            let id = if let Some(order) = board::grid_loop(&lines, &all) {
+                if let Some(f) = fills.iter().find(|f| board::same_dots(&f.dots, &order)) {
+                    style.fill = true;
+                    style.fill_color = if f.ink == board::Ink::Auto { None } else { Some(f.ink) };
+                }
+                let pts: Vec<Pos2> = order.iter().map(|d| world(*d)).collect();
+                self.add_line_item(&pts, true, style, src.layer, src.page)
+            } else {
+                let ids: Vec<Id> = lines.iter().map(|l| self.add_line_item(&[world(l.a), world(l.b)], false, Style { ink: l.ink, width: l.width, ..Style::default() }, src.layer, src.page)).collect();
+                if ids.len() > 1 { self.board.sketch(&ids, Style::default()).unwrap_or(ids[0]) } else { ids[0] }
+            };
+            self.grid_sel = None;
+            self.selection = vec![id];
+            self.say(if closed_shape { "Made a shape from the drawing" } else if lines.len() > 1 { "Made a sketch from the drawing" } else { "Made a line item" });
+            return;
+        };
+        // Onto a grid note (the same one or another): snapped to its dots, kept inside it.
+        let Kind::Grid { spacing, .. } = t.kind else { return };
+        let to_dot = |d: [i32; 2]| {
+            let q = (src.grid_dot(d) + delta - t.rect().min) / spacing.max(1.0);
+            [q.x.round() as i32, q.y.round() as i32]
+        };
+        let moved: Vec<board::GridLine> = lines.iter().map(|l| board::GridLine { a: to_dot(l.a), b: to_dot(l.b), ..*l }).collect();
+        let (cols, rows) = t.grid_size();
+        let (lo_x, hi_x) = moved.iter().flat_map(|l| [l.a[0], l.b[0]]).fold((i32::MAX, i32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        let (lo_y, hi_y) = moved.iter().flat_map(|l| [l.a[1], l.b[1]]).fold((i32::MAX, i32::MIN), |(a, b), y| (a.min(y), b.max(y)));
+        let shift = |lo: i32, hi: i32, n: i32| if lo < 1 { 1 - lo } else if hi > n { (n - hi).max(1 - lo) } else { 0 };
+        let s = [shift(lo_x, hi_x, cols), shift(lo_y, hi_y, rows)];
+        let put = |d: [i32; 2]| [d[0] + s[0], d[1] + s[1]];
+        let moved: Vec<board::GridLine> = moved.into_iter().map(|l| board::GridLine { a: put(l.a), b: put(l.b), ..l }).filter(|l| l.a != l.b).collect();
+        let moved_fills: Vec<board::GridFill> = fills.into_iter().map(|f| board::GridFill { dots: f.dots.iter().map(|d| put(to_dot(*d))).collect(), ink: f.ink }).collect();
+        if let Some(Kind::Grid { lines, fills, .. }) = self.board.get_mut(t.id).map(|o| &mut o.kind) {
+            let at = lines.len();
+            let mut added = Vec::new();
+            for l in moved {
+                if !lines.iter().any(|x| (x.a == l.a && x.b == l.b) || (x.a == l.b && x.b == l.a)) {
+                    lines.push(l);
+                    added.push(at + added.len());
+                }
+            }
+            fills.extend(moved_fills);
+            self.grid_sel = (!added.is_empty()).then_some((t.id, added));
+        }
+    }
+
+    /// Straight lines and sketches of them dropped on a grid note snap to its dots; when every corner
+    /// then sits on a dot (and nothing is connected to them) they become lines on the grid again.
+    fn snap_to_grid(&mut self) {
+        let Some(w) = self.hover_world else { return };
+        let sel = self.selection.clone();
+        let Some(g) = self.grid_at(w, &sel) else { return };
+        let Some(grid) = self.board.get(g).cloned() else { return };
+        let Kind::Grid { spacing, .. } = grid.kind else { return };
+        // Only straight lines: paths and sketches made of them.
+        let mut paths = Vec::new();
+        for id in &sel {
+            let Some(o) = self.board.get(*id) else { return };
+            match &o.kind {
+                Kind::Path { curved: false, points, .. } if points.len() <= 40 => paths.push(*id),
+                Kind::Group { sketch: true, members, .. } => {
+                    for m in members {
+                        match self.board.get(*m).map(|x| &x.kind) {
+                            Some(Kind::Path { curved: false, points, .. }) if points.len() <= 40 => paths.push(*m),
+                            _ => return,
+                        }
+                    }
+                }
+                _ => return,
+            }
+        }
+        let Some(anchor) = paths.first().and_then(|id| self.board.get(*id)).and_then(|o| o.world_points().first().copied()) else { return };
+        let (cols, rows) = grid.grid_size();
+        let q = (anchor - grid.rect().min) / spacing;
+        let d = [(q.x.round() as i32).clamp(1, cols.max(1)), (q.y.round() as i32).clamp(1, rows.max(1))];
+        let delta = grid.grid_dot(d) - anchor;
+        for id in self.board.with_descendants(&sel) {
+            if let Some(o) = self.board.get_mut(id) {
+                o.translate(delta);
+            }
+        }
+        self.board.update_groups();
+        self.mark_changed();
+        // Every corner on a dot, and no connections: back to grid lines.
+        let all = self.board.with_descendants(&sel);
+        if self.board.wires.iter().any(|x| all.contains(&x.from) || all.contains(&x.to)) {
+            return;
+        }
+        let mut lines = Vec::new();
+        let mut fills = Vec::new();
+        for id in &paths {
+            let Some(o) = self.board.get(*id) else { return };
+            let Kind::Path { closed, .. } = o.kind else { return };
+            let mut dots = Vec::new();
+            for pt in o.world_points() {
+                match grid.grid_dot_at(pt, spacing * 0.2) {
+                    Some(d) => {
+                        if dots.last() != Some(&d) {
+                            dots.push(d);
+                        }
+                    }
+                    None => return,
+                }
+            }
+            if closed && dots.len() > 2 && dots.first() == dots.last() {
+                dots.pop();
+            }
+            let mut segs: Vec<([i32; 2], [i32; 2])> = dots.windows(2).map(|s| (s[0], s[1])).collect();
+            if closed && dots.len() > 2 {
+                segs.push((dots[dots.len() - 1], dots[0]));
+                if o.style.fill {
+                    fills.push(board::GridFill { dots: dots.clone(), ink: o.style.fill_color.unwrap_or(board::Ink::Auto) });
+                }
+            }
+            lines.extend(segs.into_iter().map(|(a, b)| board::GridLine { a, b, ink: o.style.ink, width: o.style.width }));
+        }
+        if lines.is_empty() {
+            return;
+        }
+        self.board.remove(&all);
+        if let Some(Kind::Grid { lines: gl, fills: gf, .. }) = self.board.get_mut(g).map(|o| &mut o.kind) {
+            let at = gl.len();
+            let n = lines.len();
+            gl.extend(lines);
+            gf.extend(fills);
+            self.selection.clear();
+            self.grid_sel = Some((g, (at..at + n).collect()));
+        }
+        self.say("Put back on the grid");
     }
 
     /// The grid note whose dot is under `w` (the topmost), and that dot.
@@ -729,6 +929,8 @@ impl Editor {
                     let bbox = unlocked.iter().filter_map(|id| self.board.get(*id)).map(|o| o.rect()).reduce(|a, b| a.union(b)).unwrap_or(Rect::NOTHING);
                     let exclude = self.snap_exclude(&unlocked);
                     Drag::Move { start: w, orig, moved: false, bbox, exclude, copies }
+                } else if let Some((grid, lines)) = self.grid_pick(w, mods.alt) {
+                    Drag::GridMove { grid, lines, start: w, end: w }
                 } else if let Some((grid, from)) = self.grid_dot_hit(w) {
                     Drag::GridLine { grid, from, end: w }
                 } else {
@@ -951,6 +1153,7 @@ impl Editor {
             Drag::Box { end, .. } => *end = w,
             Drag::Wire { end, .. } => *end = w,
             Drag::GridLine { end, .. } => *end = w,
+            Drag::GridMove { end, .. } => *end = w,
             Drag::Erase { .. } => erase = true,
         }
         if erase {
@@ -969,6 +1172,9 @@ impl Editor {
             Drag::Move { moved, orig, copies, .. } => {
                 if moved && !orig.is_empty() {
                     self.mark_changed();
+                    if copies.is_empty() {
+                        self.snap_to_grid();
+                    }
                 }
                 // Each copy is connected to its original, on the sides that face each other.
                 let mut joined = 0;
@@ -1070,6 +1276,11 @@ impl Editor {
             Drag::Erase { erased } => {
                 if erased {
                     self.mark_changed();
+                }
+            }
+            Drag::GridMove { grid, lines, start, end } => {
+                if (end - start).length() * zoom >= 3.0 {
+                    self.drop_grid_lines(grid, lines, end - start, end);
                 }
             }
             Drag::GridLine { grid, from, end } => {
@@ -1537,6 +1748,37 @@ impl Editor {
         let pages = self.board.pages.clone();
         let mut switch = None;
         let mut delete = None;
+        let mut reorder: Option<(Id, Id)> = None;
+        // Every page in a list, to jump to one that has scrolled out of sight.
+        let list = ui.add(egui::Button::new(egui::RichText::new("☰").size(13.0)).frame(false).min_size(vec2(24.0, 24.0))).on_hover_text("All pages");
+        egui::Popup::menu(&list).show(|ui| {
+            ui.set_min_width(180.0);
+            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                for pg in &pages {
+                    if ui.add(egui::Button::selectable(pg.id == self.page, short_name(&pg.name)).min_size(vec2(180.0, 22.0))).clicked() {
+                        switch = Some(pg.id);
+                    }
+                }
+            });
+        });
+        // The buttons scroll sideways when they do not fit: the mouse wheel, or the arrows either side.
+        let scroll_id = ui.id().with("page-scroll");
+        let (offset, max): (f32, f32) = ui.data(|d| d.get_temp(scroll_id)).unwrap_or((0.0, 0.0));
+        let mut target: Option<f32> = None;
+        if ui.add_enabled(offset > 0.5, egui::Button::new(egui::RichText::new("‹").size(15.0)).frame(false).min_size(vec2(18.0, 24.0))).on_hover_text("Scroll left").clicked() {
+            target = Some((offset - 240.0).max(0.0));
+        }
+        let view_w = (ui.available_width() - 52.0).max(60.0);
+        let last_id = ui.id().with("page-last");
+        let page_changed = ui.data(|d| d.get_temp::<Id>(last_id)) != Some(self.page);
+        ui.data_mut(|d| d.insert_temp(last_id, self.page));
+        let mut sa = egui::ScrollArea::horizontal().id_salt("page-strip").max_width(view_w).auto_shrink([true, true]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+        if let Some(t) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
+            sa = sa.horizontal_scroll_offset(t);
+        }
+        let out = sa.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         for pg in &pages {
             let current = pg.id == self.page;
             if let Some((rid, name)) = self.renaming_page.clone().filter(|(r, _)| *r == pg.id) {
@@ -1556,9 +1798,21 @@ impl Editor {
                 continue;
             }
             let text = egui::RichText::new(&pg.name).size(12.5).color(if current { p.text } else { p.text_secondary });
-            let resp = ui.add(egui::Button::selectable(current, text).min_size(vec2(64.0, 24.0)).corner_radius(CornerRadius::same(7)));
+            let resp = ui.add(egui::Button::selectable(current, text).min_size(vec2(64.0, 24.0)).corner_radius(CornerRadius::same(7)).sense(Sense::click_and_drag()));
+            if current && page_changed {
+                resp.scroll_to_me(Some(Align::Center));
+            }
+            // Drag a page onto another to put it there.
+            resp.dnd_set_drag_payload(PageDrag(pg.id));
+            if let Some(from) = resp.dnd_release_payload::<PageDrag>() {
+                reorder = Some((from.0, pg.id));
+            }
+            if resp.dnd_hover_payload::<PageDrag>().is_some_and(|d| d.0 != pg.id) {
+                let r = resp.rect;
+                ui.painter().line_segment([r.left_top() - vec2(2.0, 0.0), r.left_bottom() - vec2(2.0, 0.0)], Stroke::new(2.0, p.accent));
+            }
             let count = self.board.objects.iter().filter(|o| o.page == pg.id && !o.is_group()).count();
-            let resp = resp.on_hover_text(format!("{}. Double-click to rename.", crate::editor::plural(count, "item", "items")));
+            let resp = resp.on_hover_text(format!("{}. Double-click to rename; drag to reorder.", crate::editor::plural(count, "item", "items")));
             if resp.double_clicked() {
                 self.renaming_page = Some((pg.id, pg.name.clone()));
             } else if resp.clicked() {
@@ -1570,6 +1824,34 @@ impl Editor {
                 if x.on_hover_text("Delete this page and what is on it").clicked() {
                     delete = Some(pg.id);
                 }
+            }
+        }
+            });
+        });
+        let _ = max;
+        let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
+        let offset = out.state.offset.x;
+        // The wheel scrolls the strip sideways.
+        if ui.rect_contains_pointer(out.inner_rect) {
+            let d = ui.input(|i| i.smooth_scroll_delta);
+            let step = if d.x.abs() > d.y.abs() { d.x } else { d.y };
+            if step != 0.0 && max > 0.0 {
+                target = Some((offset - step).clamp(0.0, max));
+            }
+        }
+        if ui.add_enabled(offset < max - 0.5, egui::Button::new(egui::RichText::new("›").size(15.0)).frame(false).min_size(vec2(18.0, 24.0))).on_hover_text("Scroll right").clicked() {
+            target = Some((offset + 240.0).min(max));
+        }
+        ui.data_mut(|d| d.insert_temp(scroll_id, (offset, max)));
+        if let Some(t) = target {
+            ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), t));
+            ui.ctx().request_repaint();
+        }
+        if let Some((from, to)) = reorder.filter(|(a, b)| a != b) {
+            if let (Some(a), Some(b)) = (self.board.pages.iter().position(|x| x.id == from), self.board.pages.iter().position(|x| x.id == to)) {
+                self.mark_changed();
+                let pg = self.board.pages.remove(a);
+                self.board.pages.insert(b, pg);
             }
         }
         if ui.add(egui::Button::new(egui::RichText::new("+").size(14.0)).frame(false).min_size(vec2(24.0, 24.0))).on_hover_text("New page").clicked() {
@@ -1879,7 +2161,7 @@ impl Editor {
                     painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, &o.label, FontId::proportional(12.0), color);
                 }
             }
-            Kind::Grid { lines, .. } => {
+            Kind::Grid { lines, fills, .. } => {
                 // A slightly white, see-through panel with a dotted, rounded edge, its dots, and the lines
                 // drawn on it.
                 let fill = match o.style.fill_color {
@@ -1909,7 +2191,26 @@ impl Editor {
                     painter.add(egui::Shape::mesh(mesh));
                 }
                 let inside = |d: [i32; 2]| (1..=cols).contains(&d[0]) && (1..=rows).contains(&d[1]);
-                for l in lines.iter().filter(|l| inside(l.a) && inside(l.b)) {
+                let moving: &[usize] = match &self.drag {
+                    Drag::GridMove { grid, lines, start, end } if *grid == o.id && (*end - *start).length() * z >= 3.0 => lines,
+                    _ => &[],
+                };
+                let picked: &[usize] = match &self.grid_sel {
+                    Some((g, sel)) if *g == o.id => sel,
+                    _ => &[],
+                };
+                // Filled shapes under the lines.
+                let moving_dots: Vec<[i32; 2]> = moving.iter().filter_map(|i| lines.get(*i)).flat_map(|l| [l.a, l.b]).collect();
+                for f in fills.iter().filter(|f| f.dots.iter().all(|d| inside(*d)) && !(moving.len() > 0 && f.dots.iter().all(|d| moving_dots.contains(d)))) {
+                    let pts: Vec<Pos2> = f.dots.iter().map(|d| self.camera.to_screen(origin, o.grid_dot(*d))).collect();
+                    let c = if f.ink == board::Ink::Auto { fade(self.board.ink_of(o).color(p)).gamma_multiply(0.16) } else { fade(f.ink.color(p)) };
+                    shapes::fill_polygon(painter, &pts, c);
+                }
+                for (i, l) in lines.iter().enumerate().filter(|(i, l)| inside(l.a) && inside(l.b) && !moving.contains(i)) {
+                    if picked.contains(&i) {
+                        let (a, b) = (self.camera.to_screen(origin, o.grid_dot(l.a)), self.camera.to_screen(origin, o.grid_dot(l.b)));
+                        painter.line_segment([a, b], Stroke::new((l.width * z).max(0.75) + 6.0, p.accent.gamma_multiply(0.35)));
+                    }
                     let c = fade(self.board.ink_of(o).color(p));
                     let c = if l.ink == board::Ink::Auto { c } else { fade(l.ink.color(p)) };
                     let (a, b) = (self.camera.to_screen(origin, o.grid_dot(l.a)), self.camera.to_screen(origin, o.grid_dot(l.b)));
@@ -2187,6 +2488,28 @@ impl Editor {
                 painter.line_segment([a, b], stroke);
                 if *arrow && a != b {
                     arrow_head(painter, b, (b - a).normalized(), (8.0 + self.style.width * 2.5) * z, stroke);
+                }
+            }
+            Drag::GridMove { grid, lines, start, end } if (*end - *start).length() * z >= 3.0 => {
+                if let Some(o) = self.board.get(*grid) {
+                    let Kind::Grid { lines: all, .. } = &o.kind else { return };
+                    let delta = *end - *start;
+                    // Over a grid note the lines snap to its dots; elsewhere they follow the pointer.
+                    let snap = self.grid_at(*end, &[]).and_then(|t| self.board.get(t)).map(|t| {
+                        let sp = if let Kind::Grid { spacing, .. } = t.kind { spacing } else { 1.0 };
+                        let first = all.get(lines[0]).map(|l| o.grid_dot(l.a)).unwrap_or(*start);
+                        let q = (first + delta - t.rect().min) / sp;
+                        t.rect().min + vec2(q.x.round(), q.y.round()) * sp - first
+                    });
+                    let d = snap.unwrap_or(delta);
+                    for l in lines.iter().filter_map(|i| all.get(*i)) {
+                        let c = if l.ink == board::Ink::Auto { self.board.ink_of(o).color(p) } else { l.ink.color(p) };
+                        let (a, b) = (to_s(o.grid_dot(l.a) + d), to_s(o.grid_dot(l.b) + d));
+                        painter.line_segment([a, b], Stroke::new((l.width * z).max(0.75), c));
+                    }
+                    if snap.is_none() {
+                        painter.text(to_s(*end) + vec2(14.0, 14.0), egui::Align2::LEFT_TOP, "Becomes a sketch", FontId::proportional(12.0), p.accent);
+                    }
                 }
             }
             Drag::GridLine { grid, from, end } => {
@@ -2471,6 +2794,15 @@ fn text_bar(ui: &mut Ui, area: Rect, canvas: Rect, st: &mut Style, is_text: bool
         });
     });
     taken.union(resp.response.rect)
+}
+
+/// A page button being dragged to a new place in the strip.
+#[derive(Clone, Copy)]
+struct PageDrag(Id);
+
+/// A page's name, shortened for the list of pages.
+fn short_name(name: &str) -> String {
+    if name.chars().count() > 40 { format!("{}…", name.chars().take(39).collect::<String>()) } else { name.to_owned() }
 }
 
 /// The distance between a new grid note's dots, in world units.

@@ -40,6 +40,62 @@ pub struct GridLine {
     pub width: f32,
 }
 
+/// A filled shape on a grid note: the dots around it, in order. `Auto` is a light tint of the lines.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct GridFill {
+    pub dots: Vec<[i32; 2]>,
+    pub ink: Ink,
+}
+
+/// The lines of a grid note joined to line `start` through shared dots: one drawing.
+pub fn grid_shape(lines: &[GridLine], start: usize) -> Vec<usize> {
+    let mut out = vec![start];
+    let mut k = 0;
+    while k < out.len() {
+        let l = lines[out[k]];
+        for (i, m) in lines.iter().enumerate() {
+            if !out.contains(&i) && [m.a, m.b].iter().any(|d| *d == l.a || *d == l.b) {
+                out.push(i);
+            }
+        }
+        k += 1;
+    }
+    out.sort();
+    out
+}
+
+/// The dots around a closed shape, in order, when the lines `idx` make one simple loop.
+pub fn grid_loop(lines: &[GridLine], idx: &[usize]) -> Option<Vec<[i32; 2]>> {
+    if idx.len() < 3 || idx.iter().any(|i| *i >= lines.len()) {
+        return None;
+    }
+    let mut deg: std::collections::HashMap<[i32; 2], usize> = std::collections::HashMap::new();
+    for i in idx {
+        *deg.entry(lines[*i].a).or_default() += 1;
+        *deg.entry(lines[*i].b).or_default() += 1;
+    }
+    if deg.values().any(|d| *d != 2) || deg.len() != idx.len() {
+        return None;
+    }
+    let first = lines[idx[0]];
+    let mut order = vec![first.a];
+    let mut used = vec![idx[0]];
+    let mut cur = first.b;
+    while cur != order[0] {
+        order.push(cur);
+        let next = idx.iter().copied().find(|i| !used.contains(i) && (lines[*i].a == cur || lines[*i].b == cur))?;
+        used.push(next);
+        let l = lines[next];
+        cur = if l.a == cur { l.b } else { l.a };
+    }
+    (used.len() == idx.len()).then_some(order)
+}
+
+/// Do two lists of dots hold the same dots (in any order)?
+pub fn same_dots(a: &[[i32; 2]], b: &[[i32; 2]]) -> bool {
+    a.len() == b.len() && a.iter().all(|d| b.contains(d))
+}
+
 /// A colour that is either fixed or follows the theme's text colour (so ink stays visible in both modes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Ink {
@@ -371,6 +427,9 @@ pub enum Kind {
         spacing: f32,
         #[serde(default)]
         lines: Vec<GridLine>,
+        /// Closed shapes on it that are filled.
+        #[serde(default)]
+        fills: Vec<GridFill>,
     },
     /// A named, coloured frame around other objects. Its rect follows its members. A collapsed group
     /// hides its members and shows as one compact node; their connections attach to it instead.

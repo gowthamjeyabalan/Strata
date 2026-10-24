@@ -883,6 +883,7 @@ impl App {
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(theme::panel_fill(p)).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
         // New items go on the current page and layer; the item list stays in layer order.
         self.ed.board.fix_pages(&mut self.ed.page);
+        self.ed.check_grid_sel();
         self.ed.board.fix_layers(&mut self.ed.active_layer);
         // The Calendar's chosen days hide or fade the other items.
         self.ed.apply_day_filter();

@@ -42,6 +42,8 @@ pub struct Editor {
     pub selected_wire: Option<Id>,
     /// More connections selected, by a selection box or Shift-click.
     pub marked_wires: Vec<Id>,
+    /// Lines selected on a grid note (a drawing on it), by their place in its list.
+    pub grid_sel: Option<(Id, Vec<usize>)>,
     pub tool: Tool,
     /// Style for new objects.
     pub style: Style,
@@ -175,6 +177,7 @@ impl Default for Editor {
             selection: Vec::new(),
             selected_wire: None,
             marked_wires: Vec::new(),
+            grid_sel: None,
             tool: Tool::Select,
             style: Style::default(),
             node_shape: Shape::Process,
@@ -763,10 +766,47 @@ impl Editor {
     pub fn clear_selection(&mut self) {
         self.selection.clear();
         self.clear_wires();
+        self.grid_sel = None;
+    }
+
+    /// Drop the grid selection once items are selected, or when its lines are gone.
+    pub fn check_grid_sel(&mut self) {
+        let Some((g, idx)) = &self.grid_sel else { return };
+        let n = match self.board.get(*g).map(|o| &o.kind) {
+            Some(Kind::Grid { lines, .. }) => lines.len(),
+            _ => 0,
+        };
+        if !self.selection.is_empty() || idx.is_empty() || idx.iter().any(|i| *i >= n) {
+            self.grid_sel = None;
+        }
+    }
+
+    /// Take lines `idx` off grid note `g`, with the fills they close. Returns them.
+    pub fn take_grid_lines(&mut self, g: Id, idx: &[usize]) -> (Vec<crate::board::GridLine>, Vec<crate::board::GridFill>) {
+        let Some(Kind::Grid { lines, fills, .. }) = self.board.get_mut(g).map(|o| &mut o.kind) else { return (Vec::new(), Vec::new()) };
+        let taken: Vec<crate::board::GridLine> = idx.iter().filter_map(|i| lines.get(*i).copied()).collect();
+        let mut k = 0;
+        lines.retain(|_| {
+            k += 1;
+            !idx.contains(&(k - 1))
+        });
+        let dots: Vec<[i32; 2]> = taken.iter().flat_map(|l| [l.a, l.b]).collect();
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(fills).into_iter().partition(|f| f.dots.iter().all(|d| dots.contains(d)));
+        *fills = kept;
+        (taken, gone)
     }
 
     /// Deletes the selected objects (a group goes with everything in it), or the selected connection.
     pub fn delete_selection(&mut self) {
+        // A drawing selected on a grid note.
+        if let Some((g, idx)) = self.grid_sel.take() {
+            if !self.is_locked(g) {
+                self.mark_changed();
+                let (gone, _) = self.take_grid_lines(g, &idx);
+                self.say(format!("Deleted {}", plural(gone.len(), "line", "lines")));
+            }
+            return;
+        }
         if !self.selection.is_empty() {
             // Locked items, and groups holding anything locked, stay.
             let ids: Vec<Id> = self.selection.iter().copied().filter(|id| !self.board.with_descendants(&[*id]).iter().any(|x| self.is_locked(*x))).collect();

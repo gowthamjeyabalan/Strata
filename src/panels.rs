@@ -86,7 +86,9 @@ pub fn properties_ui(ui: &mut Ui, ed: &mut Editor) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         theme::panel_body(ui, |ui| {
             let wires = ed.wires_selected();
-            if ed.selection.is_empty() && !wires.is_empty() {
+            if let Some((g, idx)) = ed.grid_sel.clone() {
+                grid_shape_props(ui, ed, g, &idx);
+            } else if ed.selection.is_empty() && !wires.is_empty() {
                 wire_props(ui, ed, &wires);
             } else if ed.selection.is_empty() {
                 new_object_props(ui, ed);
@@ -473,7 +475,7 @@ fn selection_props(ui: &mut Ui, ed: &mut Editor) {
         }
     }
 
-    if let (true, Kind::Grid { spacing, lines }) = (single, &o.kind) {
+    if let (true, Kind::Grid { spacing, lines, .. }) = (single, &o.kind) {
         theme::heading(ui, "GRID");
         ui.label(theme::secondary(ui, "Drag from dot to dot to draw a line; the eraser takes lines off. New lines take the colour and width set for drawing."));
         let mut sp = *spacing;
@@ -703,6 +705,67 @@ fn wire_props(ui: &mut Ui, ed: &mut Editor, wids: &[Id]) {
             }
         }
     });
+}
+
+/// A drawing selected on a grid note: its lines' colour and width, and its fill when it is closed.
+fn grid_shape_props(ui: &mut Ui, ed: &mut Editor, g: Id, idx: &[usize]) {
+    let Some(Kind::Grid { lines, fills, .. }) = ed.board.get(g).map(|o| o.kind.clone()) else { return };
+    let Some(first) = idx.first().and_then(|i| lines.get(*i)).copied() else { return };
+    theme::heading(ui, "DRAWING ON A GRID");
+    ui.label(theme::secondary(ui, format!("{}. Drag it to move it along the dots, onto another grid, or off the grid to make it a sketch. Alt+click picks one line.", plural(idx.len(), "line", "lines"))));
+    let set = |ed: &mut Editor, f: &dyn Fn(&mut crate::board::GridLine)| {
+        ed.mark_changed();
+        if let Some(Kind::Grid { lines, .. }) = ed.board.get_mut(g).map(|o| &mut o.kind) {
+            for i in idx {
+                if let Some(l) = lines.get_mut(*i) {
+                    f(l);
+                }
+            }
+        }
+    };
+    theme::heading(ui, "LINE");
+    if let Some(ink) = ink_row(ui, first.ink) {
+        set(ed, &|l| l.ink = ink);
+    }
+    let mut w = first.width;
+    if ui.add(egui::Slider::new(&mut w, 0.5..=40.0).logarithmic(true).max_decimals(1).text("Width")).changed() {
+        set(ed, &|l| l.width = w);
+    }
+    // A closed shape can be filled.
+    if let Some(order) = crate::board::grid_loop(&lines, idx) {
+        theme::heading(ui, "FILL");
+        let at = fills.iter().position(|f| crate::board::same_dots(&f.dots, &order));
+        let mut on = at.is_some();
+        let edit_fills = |ed: &mut Editor, f: &dyn Fn(&mut Vec<crate::board::GridFill>)| {
+            ed.mark_changed();
+            if let Some(Kind::Grid { fills, .. }) = ed.board.get_mut(g).map(|o| &mut o.kind) {
+                f(fills);
+            }
+        };
+        if ui.switch(&mut on, "Fill the shape").changed() {
+            let order = order.clone();
+            edit_fills(ed, &|fs| {
+                fs.retain(|f| !crate::board::same_dots(&f.dots, &order));
+                if on {
+                    fs.push(crate::board::GridFill { dots: order.clone(), ink: Ink::Auto });
+                }
+            });
+        }
+        if let Some(k) = at {
+            if let Some(ink) = ink_row(ui, fills[k].ink) {
+                edit_fills(ed, &|fs| {
+                    if let Some(f) = fs.get_mut(k) {
+                        f.ink = ink;
+                    }
+                });
+            }
+        }
+    }
+    ui.add_space(6.0);
+    let danger = pal(ui.ctx()).danger;
+    if ui.button(RichText::new("Delete").color(danger)).clicked() {
+        ed.delete_selection();
+    }
 }
 
 /// Where a connection starts and ends, each a link to that item.
