@@ -1,0 +1,1095 @@
+{
+"format": "strata-board",
+"version": 3,
+"camera": {
+"pan": [
+34,
+34
+],
+"zoom": 0.66
+},
+"board": {
+"next_id": 1000,
+"images": {},
+"objects": [
+{
+"id": 1,
+"rect": [
+-30,
+-20,
+560,
+690
+],
+"kind": {
+"Frame": {
+"slide": 1
+}
+},
+"label": "Review flow",
+"style": {
+"ink": "Auto",
+"width": 2.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:00:00",
+"days": [
+"2026-10-19"
+]
+},
+{
+"id": 2,
+"rect": [
+580,
+-20,
+560,
+500
+],
+"kind": {
+"Frame": {
+"slide": 2
+}
+},
+"label": "Ideas",
+"style": {
+"ink": "Auto",
+"width": 2.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 10:00:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 10,
+"rect": [
+40,
+40,
+150,
+52
+],
+"kind": {
+"Shape": {
+"shape": "Terminal"
+}
+},
+"label": "Start",
+"style": {
+"ink": {
+"Rgb": [
+78,
+121,
+167
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:30:00",
+"days": [
+"2026-10-19"
+]
+},
+{
+"id": 11,
+"rect": [
+30,
+140,
+170,
+64
+],
+"kind": {
+"Shape": {
+"shape": "Process"
+}
+},
+"label": "Collect sketches",
+"style": {
+"ink": {
+"Rgb": [
+78,
+121,
+167
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:30:00",
+"days": [
+"2026-10-19"
+]
+},
+{
+"id": 12,
+"rect": [
+40,
+250,
+150,
+96
+],
+"kind": {
+"Shape": {
+"shape": "Decision"
+}
+},
+"label": "Approved?",
+"style": {
+"ink": {
+"Rgb": [
+242,
+142,
+43
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:30:00",
+"days": [
+"2026-10-19",
+"2026-10-20"
+]
+},
+{
+"id": 13,
+"rect": [
+300,
+272,
+160,
+52
+],
+"kind": {
+"Shape": {
+"shape": "Process"
+}
+},
+"label": "Archive",
+"style": {
+"ink": {
+"Rgb": [
+89,
+161,
+79
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 09:30:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 14,
+"rect": [
+50,
+410,
+130,
+56
+],
+"kind": {
+"Shape": {
+"shape": "Process"
+}
+},
+"label": "Revise",
+"style": {
+"ink": {
+"Rgb": [
+225,
+87,
+89
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:30:00",
+"days": [
+"2026-10-19"
+]
+},
+{
+"id": 20,
+"rect": [
+10,
+0,
+10,
+10
+],
+"kind": {
+"Group": {
+"members": [
+10,
+11,
+12,
+13,
+14
+],
+"collapsed": false
+}
+},
+"label": "Review flow",
+"style": {
+"ink": {
+"Rgb": [
+78,
+121,
+167
+]
+},
+"width": 1.5,
+"fill": true,
+"font_size": 15.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:30:00",
+"days": [
+"2026-10-19"
+]
+},
+{
+"id": 50,
+"rect": [
+60,
+546.0043360055729,
+354,
+27.995182193922574
+],
+"kind": {
+"Path": {
+"points": [
+[
+0,
+13.995663994427105
+],
+[
+6,
+18.299803198552468
+],
+[
+12,
+22.18702581559353
+],
+[
+18,
+25.280799510076804
+],
+[
+24,
+27.281448665405264
+],
+[
+30,
+27.995182193922574
+],
+[
+36,
+27.352864936962874
+],
+[
+42,
+25.41671438004323
+],
+[
+48,
+22.37427401188245
+],
+[
+54,
+18.520247092422665
+],
+[
+60,
+14.227950485637962
+],
+[
+66,
+9.91315365603316
+],
+[
+72,
+5.993805532034344
+],
+[
+78,
+2.849550257559031
+],
+[
+84,
+0.7849533022135802
+],
+[
+90,
+0.0
+],
+[
+96,
+0.5707241491431887
+],
+[
+102,
+2.4418430663602066
+],
+[
+108,
+5.432112494437888
+],
+[
+114,
+9.25188266479472
+],
+[
+120,
+13.53115496276132
+],
+[
+126,
+17.855421511835402
+],
+[
+132,
+21.805816107700252
+],
+[
+138,
+24.999687317761754
+],
+[
+144,
+27.12766366927349
+],
+[
+150,
+27.983620639818128
+],
+[
+156,
+27.484646724463687
+],
+[
+162,
+25.679074584392538
+],
+[
+168,
+22.741799346985772
+],
+[
+174,
+18.957337546033386
+],
+[
+180,
+14.692267682642182
+],
+[
+186,
+10.359721927216015
+],
+[
+192,
+6.379368441975885
+],
+[
+198,
+3.136760600489424
+],
+[
+204,
+0.9459907056329939
+],
+[
+210,
+0.01926572013110217
+],
+[
+216,
+0.44635202926940565
+],
+[
+222,
+2.185880300423946
+],
+[
+228,
+5.069352686394041
+],
+[
+234,
+8.817464218381815
+],
+[
+240,
+13.067157431510282
+],
+[
+246,
+17.406789600824368
+],
+[
+252,
+21.416006144972016
+],
+[
+258,
+24.70645789604862
+],
+[
+264,
+26.959418193747865
+],
+[
+270,
+27.95665605770273
+],
+[
+276,
+27.601574935842223
+],
+[
+282,
+25.928569442848698
+],
+[
+288,
+23.09969375662672
+],
+[
+294,
+19.388964385577083
+],
+[
+300,
+15.155817805055449
+],
+[
+306,
+10.81029396527697
+],
+[
+312,
+6.773318138973536
+],
+[
+318,
+3.435928372040962
+],
+[
+324,
+1.1213979336304192
+],
+[
+330,
+0.053921740616033276
+],
+[
+336,
+0.33689991787287
+],
+[
+342,
+1.942922037836638
+],
+[
+348,
+4.71642220700744
+],
+[
+354,
+8.388747816822047
+]
+],
+"base": [
+354,
+27.995182193922574
+],
+"arrow": false,
+"brush": "Pen",
+"closed": false,
+"curved": false
+}
+},
+"label": "",
+"style": {
+"ink": "Auto",
+"width": 3.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 14:10:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 51,
+"rect": [
+70,
+586,
+360,
+18
+],
+"kind": {
+"Path": {
+"points": [
+[
+0,
+14
+],
+[
+70,
+0
+],
+[
+150,
+18
+],
+[
+230,
+2
+],
+[
+310,
+16
+],
+[
+360,
+8
+]
+],
+"base": [
+360,
+18
+],
+"arrow": false,
+"brush": "Marker",
+"closed": false,
+"curved": false
+}
+},
+"label": "",
+"style": {
+"ink": {
+"Rgb": [
+237,
+201,
+72
+]
+},
+"width": 12.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 14:10:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 52,
+"rect": [
+400,
+506,
+70,
+42
+],
+"kind": {
+"Path": {
+"points": [
+[
+0,
+14
+],
+[
+30,
+42
+],
+[
+70,
+0
+]
+],
+"base": [
+70,
+42
+],
+"arrow": false,
+"brush": "Pen",
+"closed": false,
+"curved": false
+}
+},
+"label": "",
+"style": {
+"ink": {
+"Rgb": [
+89,
+161,
+79
+]
+},
+"width": 4.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 14:10:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 53,
+"rect": [
+60,
+506,
+410,
+104
+],
+"kind": {
+"Group": {
+"members": [
+50,
+51,
+52
+],
+"collapsed": false,
+"sketch": true
+}
+},
+"label": "",
+"style": {
+"ink": "Auto",
+"width": 2.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 14:10:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 60,
+"rect": [
+600,
+30,
+260,
+320
+],
+"kind": {
+"Note": {
+"note": 70
+}
+},
+"label": "",
+"style": {
+"ink": "Auto",
+"width": 2.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-19 09:25:00",
+"days": [
+"2026-10-19",
+"2026-10-20"
+]
+},
+{
+"id": 61,
+"rect": [
+890,
+30,
+230,
+170
+],
+"kind": {
+"Note": {
+"note": 71
+}
+},
+"label": "",
+"style": {
+"ink": "Auto",
+"width": 2.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 10:06:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 62,
+"rect": [
+900,
+225,
+200,
+100
+],
+"kind": {
+"Shape": {
+"shape": "Note"
+}
+},
+"label": "Try a darker canvas",
+"style": {
+"ink": {
+"Rgb": [
+237,
+201,
+72
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 09:30:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 63,
+"rect": [
+610,
+380,
+250,
+70
+],
+"kind": {
+"Path": {
+"points": [
+[
+0,
+40
+],
+[
+60,
+0
+],
+[
+130,
+70
+],
+[
+190,
+5
+],
+[
+250,
+60
+]
+],
+"base": [
+250,
+70
+],
+"arrow": false,
+"brush": "Pen",
+"closed": false,
+"curved": true
+}
+},
+"label": "",
+"style": {
+"ink": {
+"Rgb": [
+118,
+183,
+178
+]
+},
+"width": 4.0,
+"fill": false,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 14:10:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 64,
+"rect": [
+930,
+350,
+170,
+105
+],
+"kind": {
+"Path": {
+"points": [
+[
+0,
+45
+],
+[
+45,
+0
+],
+[
+145,
+12
+],
+[
+170,
+75
+],
+[
+80,
+105
+]
+],
+"base": [
+170,
+105
+],
+"arrow": false,
+"brush": "Pen",
+"closed": true,
+"curved": false
+}
+},
+"label": "",
+"style": {
+"ink": {
+"Rgb": [
+78,
+121,
+167
+]
+},
+"width": 2.5,
+"fill": true,
+"font_size": 16.0
+},
+"page": 900,
+"layer": 902,
+"created": "2026-10-20 14:10:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 100,
+"rect": [
+40,
+40,
+180,
+64
+],
+"kind": {
+"Shape": {
+"shape": "Document"
+}
+},
+"label": "Survey results",
+"style": {
+"ink": {
+"Rgb": [
+78,
+121,
+167
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 901,
+"layer": 902,
+"created": "2026-10-20 09:30:00",
+"days": [
+"2026-10-20"
+]
+},
+{
+"id": 101,
+"rect": [
+300,
+40,
+160,
+90
+],
+"kind": {
+"Shape": {
+"shape": "Database"
+}
+},
+"label": "Sketch archive",
+"style": {
+"ink": {
+"Rgb": [
+118,
+183,
+178
+]
+},
+"width": 2.0,
+"fill": true,
+"font_size": 16.0
+},
+"page": 901,
+"layer": 902,
+"created": "2026-10-20 09:30:00",
+"days": [
+"2026-10-20"
+]
+}
+],
+"wires": [
+{
+"id": 40,
+"from": 10,
+"to": 11,
+"from_side": "Bottom",
+"to_side": "Top",
+"label": "",
+"style": "Curve"
+},
+{
+"id": 41,
+"from": 11,
+"to": 12,
+"from_side": "Bottom",
+"to_side": "Top",
+"label": "",
+"style": "Curve"
+},
+{
+"id": 42,
+"from": 12,
+"to": 13,
+"from_side": "Right",
+"to_side": "Left",
+"label": "yes",
+"style": "Curve"
+},
+{
+"id": 43,
+"from": 12,
+"to": 14,
+"from_side": "Bottom",
+"to_side": "Top",
+"label": "no",
+"style": "Curve"
+},
+{
+"id": 44,
+"from": 14,
+"to": 11,
+"from_side": "Left",
+"to_side": "Left",
+"label": "",
+"style": "Curve"
+},
+{
+"id": 45,
+"from": 13,
+"to": 60,
+"from_side": "Right",
+"to_side": "Left",
+"label": "",
+"style": "Curve"
+},
+{
+"id": 46,
+"from": 100,
+"to": 101,
+"from_side": "Right",
+"to_side": "Left",
+"label": "",
+"style": "Curve"
+}
+],
+"layers": [
+{
+"id": 902,
+"name": "Layer 1"
+}
+],
+"pages": [
+{
+"id": 900,
+"name": "Plan"
+},
+{
+"id": 901,
+"name": "Research"
+}
+],
+"notes": [
+{
+"id": 70,
+"folder": 80,
+"created": "2026-10-19 09:20:00",
+"text": "# Project notes\n\nPlan for the **review flow** this week. Open questions are in [[Ideas]].\n\n## Tasks\n- [x] Sketch the flow\n- [x] Collect sketches\n- [ ] Review with the team\n- [ ] Archive approved work\n\n| Step | Owner |\n|---|---|\n| Collect | Asha |\n| Review | Ben |\n"
+},
+{
+"id": 71,
+"folder": 81,
+"created": "2026-10-20 10:05:00",
+"text": "# Ideas\n\n- A darker canvas for night work\n- Present each frame as a slide\n- Back to [[Project notes]]\n"
+},
+{
+"id": 72,
+"folder": 80,
+"created": "2026-10-20 11:40:00",
+"text": "# Meeting 20 Oct\n\nAgreed to present the *Review flow* frame on Friday.\n\n- [ ] Book the room\n- [ ] Share the board\n"
+}
+],
+"folders": [
+{
+"id": 80,
+"name": "Work"
+},
+{
+"id": 81,
+"name": "Ideas"
+}
+]
+}
+}

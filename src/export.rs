@@ -126,7 +126,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor, s: &mut ExportSettings) {
     }
     if go {
         let name = ed.file_name();
-        let stem = name.trim_end_matches(".overlay");
+        let stem = name.trim_end_matches(".overlay").trim_end_matches(".strata");
         let path = rfd::FileDialog::new()
             .add_filter(if s.format == Format::Png { "PNG image" } else { "JPG image" }, &[s.format.ext()])
             .set_file_name(format!("{stem}.{}", s.format.ext()))
@@ -179,7 +179,7 @@ pub fn render(ctx: &egui::Context, ed: &mut Editor, world: Rect, scale: f32, bac
     let saved = (ed.camera, std::mem::take(&mut ed.selection), ed.selected_wire.take(), ed.hover_world.take(), ed.tool, ed.editing.take(), ed.editing_wire.take());
     ed.camera = Camera { pan: [-world.min.x * scale, -world.min.y * scale], zoom: scale };
     ed.tool = crate::tools::Tool::Select;
-    let layer = LayerId::new(Order::Background, Id::new("overlay-export"));
+    let layer = LayerId::new(Order::Background, Id::new("strata-export"));
     let painter = egui::Painter::new(ctx.clone(), layer, frame);
     let look = ed.board.lookup();
     // Exports show items at full strength even while the Calendar fades some.

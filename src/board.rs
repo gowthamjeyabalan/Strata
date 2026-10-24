@@ -1612,7 +1612,9 @@ pub struct FileV1 {
     pub camera: crate::canvas::Camera,
 }
 
-pub const FILE_FORMAT: &str = "overlay-board";
+pub const FILE_FORMAT: &str = "strata-board";
+/// The format named in boards saved when Strata was called Overlay (the same format).
+pub const OLD_FILE_FORMAT: &str = "overlay-board";
 
 mod b64 {
     use base64::Engine;

@@ -25,7 +25,7 @@ pub struct RecoveryInfo {
     pub when: String,
 }
 
-/// A recovery copy found when Overlay starts.
+/// A recovery copy found when Strata starts.
 #[derive(Clone)]
 pub struct Recovered {
     pub file: PathBuf,
@@ -36,7 +36,7 @@ pub struct Recovered {
 /// The folder recovery copies go in.
 pub fn recovery_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join("Overlay").join("recovery")
+    base.join("Strata").join("recovery")
 }
 
 /// The recovery copy for a board: named after its file, or after when this run started when it has
@@ -52,13 +52,13 @@ pub fn recovery_path(original: Option<&Path>, session: &str) -> PathBuf {
         }
         None => format!("untitled-{session}"),
     };
-    recovery_dir().join(format!("{name}.overlay"))
+    recovery_dir().join(format!("{name}.strata"))
 }
 
 /// Write `json` as the recovery copy at `file`, with a note of what it belongs to.
 pub fn write_recovery(file: &Path, json: &str, original: Option<&Path>) -> Result<(), String> {
     std::fs::create_dir_all(recovery_dir()).map_err(|e| e.to_string())?;
-    let tmp = file.with_extension("overlay.tmp");
+    let tmp = file.with_extension("strata.tmp");
     std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, file).map_err(|e| e.to_string())?;
     let info = RecoveryInfo { original: original.map(Path::to_path_buf), when: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string() };
@@ -78,7 +78,7 @@ pub fn find_recovered() -> Vec<Recovered> {
     let mut out = Vec::new();
     for e in dir.flatten() {
         let file = e.path();
-        if file.extension().and_then(|x| x.to_str()) != Some("overlay") {
+        if !matches!(file.extension().and_then(|x| x.to_str()), Some("strata" | "overlay")) {
             continue;
         }
         let info: Option<RecoveryInfo> = std::fs::read_to_string(file.with_extension("json")).ok().and_then(|t| serde_json::from_str(&t).ok());
@@ -99,8 +99,8 @@ pub fn find_recovered() -> Vec<Recovered> {
     out
 }
 
-/// The next numbered file after `path`: plan.overlay → plan-001.overlay, plan-004.overlay →
-/// plan-005.overlay, skipping numbers already taken in the folder.
+/// The next numbered file after `path`: plan.strata → plan-001.strata, plan-004.strata →
+/// plan-005.strata, skipping numbers already taken in the folder.
 pub fn next_increment(path: &Path) -> PathBuf {
     let dir = path.parent().unwrap_or(Path::new("."));
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
@@ -111,7 +111,7 @@ pub fn next_increment(path: &Path) -> PathBuf {
     };
     loop {
         n += 1;
-        let p = dir.join(format!("{base}-{n:03}.overlay"));
+        let p = dir.join(format!("{base}-{n:03}.strata"));
         if !p.exists() {
             return p;
         }
@@ -130,8 +130,9 @@ pub fn back_up(path: &Path, keep: u32) {
         return;
     }
     let stamp = chrono::Local::now().format("%Y-%m-%d %H%M%S");
-    let _ = std::fs::copy(path, dir.join(format!("{stem} {stamp}.overlay")));
-    let mut copies: Vec<PathBuf> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("overlay")).collect()).unwrap_or_default();
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("strata");
+    let _ = std::fs::copy(path, dir.join(format!("{stem} {stamp}.{ext}")));
+    let mut copies: Vec<PathBuf> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| matches!(p.extension().and_then(|x| x.to_str()), Some("strata" | "overlay"))).collect()).unwrap_or_default();
     // The names sort by time.
     copies.sort();
     while copies.len() > keep as usize {
@@ -146,8 +147,8 @@ mod tests {
     #[test]
     fn increments_count_on() {
         let dir = std::env::temp_dir();
-        assert_eq!(next_increment(&dir.join("plan.overlay")).file_name().unwrap(), "plan-001.overlay");
-        assert_eq!(next_increment(&dir.join("plan-004.overlay")).file_name().unwrap(), "plan-005.overlay");
-        assert_eq!(next_increment(&dir.join("plan_v2_09.overlay")).file_name().unwrap(), "plan_v2-010.overlay");
+        assert_eq!(next_increment(&dir.join("plan.strata")).file_name().unwrap(), "plan-001.strata");
+        assert_eq!(next_increment(&dir.join("plan-004.strata")).file_name().unwrap(), "plan-005.strata");
+        assert_eq!(next_increment(&dir.join("plan_v2_09.overlay")).file_name().unwrap(), "plan_v2-010.strata");
     }
 }

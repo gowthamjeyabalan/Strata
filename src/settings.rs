@@ -28,7 +28,7 @@ impl SettingsWindow {
 pub struct AppPrefs<'a> {
     pub appearance: &'a mut Appearance,
     pub ui_scale: &'a mut f32,
-    /// Show the start view when Overlay opens (otherwise reopen the last board).
+    /// Show the start view when Strata opens (otherwise reopen the last board).
     pub start_view: &'a mut bool,
     pub glass: &'a mut theme::Glass,
     /// Windows is drawing the backdrop.
@@ -180,7 +180,7 @@ fn appearance(ui: &mut Ui, app: &mut AppPrefs) {
 
     group(ui, "TRANSLUCENCY");
     let g = &mut *app.glass;
-    row(ui, "Window backdrop", "The material Windows 11 draws behind Overlay. Mica takes a soft tint from the desktop wallpaper, Mica Alt a stronger one, and Acrylic blurs whatever is behind the window.", |ui| {
+    row(ui, "Window backdrop", "The material Windows 11 draws behind Strata. Mica takes a soft tint from the desktop wallpaper, Mica Alt a stronger one, and Acrylic blurs whatever is behind the window.", |ui| {
         ui.set_width(300.0);
         ui.segmented(&mut g.backdrop, &[(Backdrop::None, "None"), (Backdrop::Mica, "Mica"), (Backdrop::MicaAlt, "Mica Alt"), (Backdrop::Acrylic, "Acrylic")]);
     });
@@ -295,7 +295,7 @@ fn radial(ui: &mut Ui, ed: &mut Editor) {
 
 fn undo(ui: &mut Ui, ed: &mut Editor) {
     group(ui, "UNDO");
-    row(ui, "Changes kept", "How many changes Ctrl+Z can take back. They are kept while Overlay is open, not in the file.", |ui| {
+    row(ui, "Changes kept", "How many changes Ctrl+Z can take back. They are kept while Strata is open, not in the file.", |ui| {
         ui.spacing_mut().slider_width = 170.0;
         let mut n = ed.undo_steps;
         if ui.add(egui::Slider::new(&mut n, 20..=500).step_by(10.0)).changed() {
@@ -308,11 +308,11 @@ fn undo(ui: &mut Ui, ed: &mut Editor) {
 fn files(ui: &mut Ui, app: &mut AppPrefs, ed: &mut Editor) {
     use crate::autosave::Autosave;
     group(ui, "STARTING");
-    row(ui, "Start view", "When Overlay opens, show the start view with recent boards. When off, the last board opens straight away.", |ui| {
+    row(ui, "Start view", "When Strata opens, show the start view with recent boards. When off, the last board opens straight away.", |ui| {
         ui.switch(app.start_view, "");
     });
     group(ui, "AUTOSAVE");
-    row(ui, "Autosave", "Save changes every few minutes without being asked. To the file: the board's own file is saved (a board never saved gets a recovery copy). Recovery copy only: your file changes only when you save, and the copy is offered back if Overlay closes without saving.", |ui| {
+    row(ui, "Autosave", "Save changes every few minutes without being asked. To the file: the board's own file is saved (a board never saved gets a recovery copy). Recovery copy only: your file changes only when you save, and the copy is offered back if Strata closes without saving.", |ui| {
         ui.set_width(300.0);
         ui.segmented(&mut ed.autosave, &[(Autosave::Off, "Off"), (Autosave::File, "To the file"), (Autosave::Recovery, "Recovery copy")]);
     });
@@ -425,10 +425,10 @@ fn shortcuts(ui: &mut Ui, win: &mut SettingsWindow, ed: &mut Editor) {
 fn about(ui: &mut Ui) {
     let p = pal(ui.ctx());
     ui.add_space(8.0);
-    ui.label(theme::semibold(format!("Overlay {}", env!("CARGO_PKG_VERSION"))).size(15.0).color(p.text));
+    ui.label(theme::semibold(format!("Strata {}", env!("CARGO_PKG_VERSION"))).size(15.0).color(p.text));
     ui.label(RichText::new("A whiteboard where every image, sketch, shape and note is a node.").size(13.0).color(p.text_secondary));
     ui.add_space(10.0);
     ui.label(RichText::new("Written in Rust with egui. The look follows the GJ Design System. Released under the MIT licence.").size(12.5).color(p.text_secondary));
     ui.add_space(6.0);
-    ui.hyperlink_to("github.com/gowthamjeyabalan/overlay", "https://github.com/gowthamjeyabalan/overlay");
+    ui.hyperlink_to("github.com/gowthamjeyabalan/strata", "https://github.com/gowthamjeyabalan/strata");
 }

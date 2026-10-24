@@ -1,5 +1,5 @@
 //! Colour palettes and value → colour mapping.
-//! Copied whole from the GJ Design System; Overlay uses the categorical colours for ink so far.
+//! Copied whole from the GJ Design System; Strata uses the categorical colours for ink so far.
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 

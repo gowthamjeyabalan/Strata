@@ -2,7 +2,7 @@
 //! plus a few small widgets (switch, segmented control, section headings, cards).
 //!
 //! Copied from the GJ Design System (`design/` holds the source docs and tokens).
-//! Overlay adds the derived light theme from `tokens.css` (`[data-theme="light"]`): both styles are
+//! Strata adds the derived light theme from `tokens.css` (`[data-theme="light"]`): both styles are
 //! registered with egui and the theme preference (dark, light, follow the system) picks one.
 
 use egui::{

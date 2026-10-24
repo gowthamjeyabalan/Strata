@@ -1,8 +1,8 @@
-//! Overlay brand kit generator.
+//! Strata brand kit generator.
 //!
-//! The mark is an "O" left open at the top right, closed by the blue dot: a board is finished when
-//! things connect. It follows the Graphsight rules: 10-unit round strokes in a 100-unit box, one blue dot,
-//! Paper strokes on Night for the app icon, and a heavier cut (12.5 stroke) for 32 px and smaller.
+//! The mark is one strip folded into three layers: an S for Strata, the strata themselves, and the
+//! blue dot (a node) where the strip ends. It follows the Graphsight rules: 10-unit round strokes in a
+//! 100-unit box, one blue dot, and a heavier cut (12 stroke) for 32 px and smaller.
 //!
 //! Run from the repository root:  cargo run --release --manifest-path tools/brand/Cargo.toml
 //! Everything is written to `brand/`.
@@ -18,36 +18,46 @@ const SECONDARY_DARK: &str = "#9898A2";
 const SECONDARY_LIGHT: &str = "#6E6E73";
 const TAGLINE: &str = "A whiteboard where every image, sketch and shape is a node.";
 
-/// One cut of the mark, in a 100 x 100 box centred on (50, 50).
+/// One cut of the mark, in a 100 x 100 box. The strip runs right to left along the top layer, turns
+/// down on the left, runs back along the middle, turns down on the right, and runs left along the
+/// bottom layer to just short of the dot.
 struct Cut {
-    radius: f32,
     stroke: f32,
-    /// Where the open arc starts and ends, in degrees (0 = right, clockwise is positive, as on screen).
-    from: f32,
-    to: f32,
-    dot_angle: f32,
+    /// The three layers' heights (evenly spaced: each turn is half the spacing across).
+    rows: [f32; 3],
+    /// Where the top layer starts, where the turns are (left, right), and where the bottom layer stops.
+    start: f32,
+    left: f32,
+    right: f32,
+    end: f32,
+    dot: (f32, f32),
     dot_radius: f32,
 }
 
 /// The cut used from 40 px up.
-const REGULAR: Cut = Cut { radius: 24.0, stroke: 10.0, from: 16.0, to: -76.0, dot_angle: -30.0, dot_radius: 8.0 };
-/// The heavier cut for 32 px and smaller, with a wider gap so it stays open.
-const SMALL: Cut = Cut { radius: 22.0, stroke: 12.5, from: 30.0, to: -90.0, dot_angle: -30.0, dot_radius: 9.0 };
+const REGULAR: Cut = Cut { stroke: 10.0, rows: [28.0, 50.0, 72.0], start: 74.5, left: 41.5, right: 63.5, end: 44.5, dot: (28.5, 72.0), dot_radius: 8.0 };
+/// The heavier cut for 32 px and smaller.
+const SMALL: Cut = Cut { stroke: 12.0, rows: [27.0, 50.0, 73.0], start: 75.0, left: 41.5, right: 63.5, end: 46.0, dot: (28.0, 73.0), dot_radius: 9.0 };
 
-fn at(r: f32, deg: f32) -> (f32, f32) {
-    let a = deg.to_radians();
-    (50.0 + r * a.cos(), 50.0 + r * a.sin())
-}
+/// The regular mark's extent in its box: left, top, width, height.
+const BOUNDS: (f32, f32, f32, f32) = (20.5, 23.0, 59.0, 54.0);
 
-/// The mark as SVG elements: the open "O" in `ink`, the dot in `dot`.
+/// The mark as SVG elements: the folded strip in `ink`, the dot in `dot`.
 fn mark(cut: &Cut, ink: &str, dot: &str) -> String {
-    let (x1, y1) = at(cut.radius, cut.from);
-    let (x2, y2) = at(cut.radius, cut.to);
-    let (dx, dy) = at(cut.radius, cut.dot_angle);
+    let [y0, y1, y2] = cut.rows;
+    let t = (y1 - y0) * 0.5;
+    let d = format!(
+        "M{s:.2} {y0:.2} L{l:.2} {y0:.2} A{t} {t} 0 0 0 {l:.2} {y1:.2} L{r:.2} {y1:.2} A{t} {t} 0 0 1 {r:.2} {y2:.2} L{e:.2} {y2:.2}",
+        s = cut.start,
+        l = cut.left,
+        r = cut.right,
+        e = cut.end,
+    );
     format!(
-        r#"<path d="M{x1:.2} {y1:.2} A{r} {r} 0 1 1 {x2:.2} {y2:.2}" fill="none" stroke="{ink}" stroke-width="{sw}" stroke-linecap="round"/><circle cx="{dx:.2}" cy="{dy:.2}" r="{dr}" fill="{dot}"/>"#,
-        r = cut.radius,
+        r#"<path d="{d}" fill="none" stroke="{ink}" stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round"/><circle cx="{dx:.2}" cy="{dy:.2}" r="{dr}" fill="{dot}"/>"#,
         sw = cut.stroke,
+        dx = cut.dot.0,
+        dy = cut.dot.1,
         dr = cut.dot_radius,
     )
 }
@@ -147,23 +157,23 @@ struct Fonts {
     body: Font,
 }
 
-/// Mark plus wordmark side by side. The "O" spans the wordmark's x-height band, like a letter.
+/// Mark plus wordmark side by side. The mark stands a little taller than the lowercase letters,
+/// centred on them, like a capital S.
 /// Returns (svg content, width, height) in user units, origin at the top left.
 fn lockup_horizontal(f: &Fonts, ink: &str, dot: &str) -> (String, f32, f32) {
     let size = 100.0;
-    // The mark's outer diameter is 58 units in its box; scale it to the wordmark's x-height plus a little.
-    let probe = f.display.text("overlay", size, 0.0, 0.0, -0.01);
-    let mark_h = probe.x_height * 1.32;
-    let s = mark_h / 58.0;
+    let probe = f.display.text("strata", size, 0.0, 0.0, -0.01);
+    let mark_h = probe.x_height * 1.45;
+    let s = mark_h / BOUNDS.3;
     let top = 0.0;
     let baseline = top + mark_h * 0.5 + probe.x_height * 0.5;
-    let text_x = mark_h + mark_h * 0.34;
-    let t = f.display.text("overlay", size, text_x, baseline, -0.01);
+    let text_x = BOUNDS.2 * s + mark_h * 0.3;
+    let t = f.display.text("strata", size, text_x, baseline, -0.01);
     let height = (baseline + t.descent).max(mark_h);
     let body = format!(
         r#"<g transform="translate({tx:.2} {ty:.2}) scale({s:.4})">{m}</g><path d="{d}" fill="{ink}"/>"#,
-        tx = -21.0 * s,
-        ty = top - 21.0 * s,
+        tx = -BOUNDS.0 * s,
+        ty = top - BOUNDS.1 * s,
         m = mark(&REGULAR, ink, dot),
         d = t.d,
     );
@@ -173,16 +183,16 @@ fn lockup_horizontal(f: &Fonts, ink: &str, dot: &str) -> (String, f32, f32) {
 /// Mark above, wordmark below, centred.
 fn lockup_stacked(f: &Fonts, ink: &str, dot: &str) -> (String, f32, f32) {
     let size = 100.0;
-    let probe = f.display.text("overlay", size, 0.0, 0.0, -0.01);
+    let probe = f.display.text("strata", size, 0.0, 0.0, -0.01);
     let width = probe.width;
-    let mark_h = width * 0.42;
-    let s = mark_h / 58.0;
-    let baseline = mark_h + size * 0.28 + probe.x_height;
-    let t = f.display.text("overlay", size, 0.0, baseline, -0.01);
+    let mark_h = width * 0.38;
+    let s = mark_h / BOUNDS.3;
+    let baseline = mark_h + size * 0.42 + probe.x_height;
+    let t = f.display.text("strata", size, 0.0, baseline, -0.01);
     let body = format!(
         r#"<g transform="translate({tx:.2} {ty:.2}) scale({s:.4})">{m}</g><path d="{d}" fill="{ink}"/>"#,
-        tx = (width - mark_h) * 0.5 - 21.0 * s,
-        ty = -21.0 * s,
+        tx = (width - BOUNDS.2 * s) * 0.5 - BOUNDS.0 * s,
+        ty = -BOUNDS.1 * s,
         m = mark(&REGULAR, ink, dot),
         d = t.d,
     );
@@ -272,8 +282,8 @@ fn main() {
     // Marks.
     for (name, ink, dot) in [("color-on-dark", PAPER, BLUE), ("color-on-light", NIGHT, BLUE), ("white", WHITE, WHITE), ("ink", NIGHT, NIGHT)] {
         let svg = mark_svg(&REGULAR, ink, dot);
-        out.svg(&format!("overlay-mark-{name}"), &svg);
-        out.png(&format!("overlay-mark-{name}-1024"), &svg, 1024, 1024);
+        out.svg(&format!("strata-mark-{name}"), &svg);
+        out.png(&format!("strata-mark-{name}-1024"), &svg, 1024, 1024);
     }
 
     // App icons: Blue (the app icon, as Graphsight's) and Night, each with a small cut.
@@ -282,52 +292,52 @@ fn main() {
         ("blue", icon_svg(&REGULAR, BLUE, WHITE, WHITE), icon_svg(&SMALL, BLUE, WHITE, WHITE)),
     ];
     for (name, regular, small) in &icons {
-        out.svg(&format!("overlay-icon-{name}"), regular);
-        out.svg(&format!("overlay-icon-{name}-small"), small);
+        out.svg(&format!("strata-icon-{name}"), regular);
+        out.svg(&format!("strata-icon-{name}-small"), small);
         for size in [16u32, 20, 24, 32, 40, 48, 64, 96, 128, 180, 192, 256, 512, 1024] {
             let svg = if size <= 32 { small } else { regular };
-            out.png(&format!("overlay-icon-{name}-{size}"), svg, size, size);
+            out.png(&format!("strata-icon-{name}-{size}"), svg, size, size);
         }
     }
     out.svg("favicon", &icons[1].2);
     // Like Graphsight, the blue icon is the default and the Night one is the alternate.
-    ico(&mut out, "overlay", &icons[1].1, &icons[1].2);
-    ico(&mut out, "overlay-dark", &icons[0].1, &icons[0].2);
+    ico(&mut out, "strata", &icons[1].1, &icons[1].2);
+    ico(&mut out, "strata-dark", &icons[0].1, &icons[0].2);
 
     // Wordmark alone.
     for (name, ink) in [("white", PAPER), ("ink", NIGHT)] {
-        let t = fonts.display.text("overlay", 100.0, 0.0, 100.0, -0.01);
+        let t = fonts.display.text("strata", 100.0, 0.0, 100.0, -0.01);
         let body = format!(r#"<path d="{}" fill="{ink}"/>"#, t.d);
-        out.svg(&format!("overlay-wordmark-{name}"), &wrap(&body, t.width, 100.0 + t.descent, 2.0, None));
+        out.svg(&format!("strata-wordmark-{name}"), &wrap(&body, t.width, 100.0 + t.descent, 2.0, None));
     }
 
     // Lockups.
     for (scheme, ink, bg) in [("on-dark", PAPER, NIGHT), ("on-light", NIGHT, PAPER)] {
         let (b, w, h) = lockup_horizontal(&fonts, ink, BLUE);
         let svg = wrap(&b, w, h, h * 0.12, None);
-        out.svg(&format!("overlay-lockup-horizontal-{scheme}"), &svg);
+        out.svg(&format!("strata-lockup-horizontal-{scheme}"), &svg);
         let svg_bg = wrap(&b, w, h, h * 0.35, Some(bg));
         let a = svg_aspect(&svg_bg);
-        out.png(&format!("overlay-lockup-horizontal-{scheme}"), &svg_bg, 1200, (1200.0 / a).round() as u32);
+        out.png(&format!("strata-lockup-horizontal-{scheme}"), &svg_bg, 1200, (1200.0 / a).round() as u32);
 
         let (b, w, h) = lockup_stacked(&fonts, ink, BLUE);
         let svg = wrap(&b, w, h, w * 0.06, None);
-        out.svg(&format!("overlay-lockup-stacked-{scheme}"), &svg);
+        out.svg(&format!("strata-lockup-stacked-{scheme}"), &svg);
         let svg_bg = wrap(&b, w, h, w * 0.2, Some(bg));
         let a = svg_aspect(&svg_bg);
-        out.png(&format!("overlay-lockup-stacked-{scheme}"), &svg_bg, 1000, (1000.0 / a).round() as u32);
+        out.png(&format!("strata-lockup-stacked-{scheme}"), &svg_bg, 1000, (1000.0 / a).round() as u32);
     }
 
     // README header (transparent, one per GitHub theme) and the social banner.
     let dark = header(&fonts, 1200.0, 300.0, PAPER, SECONDARY_DARK, None, 560.0);
     let light = header(&fonts, 1200.0, 300.0, NIGHT, SECONDARY_LIGHT, None, 560.0);
-    out.svg("overlay-readme-header-dark", &dark);
-    out.svg("overlay-readme-header-light", &light);
-    out.png("overlay-readme-header-dark", &dark, 2400, 600);
-    out.png("overlay-readme-header-light", &light, 2400, 600);
+    out.svg("strata-readme-header-dark", &dark);
+    out.svg("strata-readme-header-light", &light);
+    out.png("strata-readme-header-dark", &dark, 2400, 600);
+    out.png("strata-readme-header-light", &light, 2400, 600);
     let banner = header(&fonts, 1280.0, 640.0, PAPER, SECONDARY_DARK, Some(NIGHT), 640.0);
-    out.svg("overlay-social-banner", &banner);
-    out.png("overlay-social-banner-1280x640", &banner, 1280, 640);
+    out.svg("strata-social-banner", &banner);
+    out.png("strata-social-banner-1280x640", &banner, 1280, 640);
 
     println!("Wrote {} files to {}", out.count, out.root.display());
 }

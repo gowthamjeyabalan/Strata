@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Written to the system clipboard when objects are copied, so a paste knows to use the internal copy.
-const CLIPBOARD_MARKER: &str = "overlay:objects";
+const CLIPBOARD_MARKER: &str = "strata:objects";
 
 /// `name` made safe for a file name on Windows.
 fn safe_file_name(name: &str) -> String {
@@ -482,7 +482,7 @@ impl Editor {
         Some(format!("![{name}](image:{id})"))
     }
 
-    /// Pictures on the clipboard, put into the board for a note: images copied in Overlay, or an image
+    /// Pictures on the clipboard, put into the board for a note: images copied in Strata, or an image
     /// such as a screenshot. Returns the text that shows them, or None when there are none.
     pub fn clipboard_pictures(&mut self) -> Option<String> {
         let mut cb = arboard::Clipboard::new().ok()?;
@@ -1368,15 +1368,15 @@ impl Editor {
 
     /// The demo board that ships inside the app (opened untitled, so saving asks where).
     pub fn load_demo(&mut self) {
-        if let Err(e) = self.load_text(include_str!("../examples/demo.overlay"), None) {
+        if let Err(e) = self.load_text(include_str!("../examples/demo.strata"), None) {
             self.say(format!("Could not open the demo: {e}"));
         }
     }
 
     fn load_text(&mut self, text: &str, path: Option<&Path>) -> Result<(), String> {
-        let f: FileV1 = serde_json::from_str(text).map_err(|e| format!("not an Overlay board ({e})"))?;
-        if f.format != FILE_FORMAT {
-            return Err("not an Overlay board".into());
+        let f: FileV1 = serde_json::from_str(text).map_err(|e| format!("not a Strata board ({e})"))?;
+        if f.format != FILE_FORMAT && f.format != crate::board::OLD_FILE_FORMAT {
+            return Err("not a Strata board".into());
         }
         *self = self.fresh();
         self.board = f.board;
@@ -1388,6 +1388,12 @@ impl Editor {
         self.path = path.map(Path::to_owned);
         let n = self.board.objects.len();
         self.say(format!("Opened {}, {}", plural(n, "object", "objects"), plural(self.board.wires.len(), "connection", "connections")));
+        // A board from when Strata was called Overlay saves as a .strata file beside it.
+        if let Some(p) = self.path.as_ref().filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("overlay"))) {
+            let new = p.with_extension("strata");
+            self.say(format!("Opened {}; it saves as {}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), new.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+            self.path = Some(new);
+        }
         Ok(())
     }
 
@@ -1421,7 +1427,7 @@ impl Editor {
 
     fn write_file(&self, path: &Path) -> Result<(), String> {
         let json = self.file_text()?;
-        let tmp = path.with_extension("overlay.tmp");
+        let tmp = path.with_extension("strata.tmp");
         std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
     }
@@ -1507,7 +1513,7 @@ impl Editor {
     pub fn save(&mut self, save_as: bool) -> bool {
         let path = match (&self.path, save_as) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new().add_filter("Overlay board", &["overlay"]).set_file_name(format!("{}.overlay", self.file_name().trim_end_matches(".overlay"))).save_file(),
+            _ => rfd::FileDialog::new().add_filter("Strata board", &["strata"]).set_file_name(format!("{}.strata", self.file_name().trim_end_matches(".overlay").trim_end_matches(".strata"))).save_file(),
         };
         let Some(path) = path else { return false };
         match self.save_to(&path) {
@@ -1520,7 +1526,7 @@ impl Editor {
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Overlay board", &["overlay"]).pick_file() {
+        if let Some(path) = rfd::FileDialog::new().add_filter("Strata board", &["strata", "overlay"]).pick_file() {
             if let Err(e) = self.load(&path) {
                 self.say(format!("Could not open {}: {e}", path.display()));
             } else {

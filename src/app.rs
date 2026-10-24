@@ -69,7 +69,9 @@ struct Settings {
     workspaces: Option<Vec<(String, DockState<Tab>)>>,
 }
 
-const SETTINGS_KEY: &str = "overlay-settings";
+const SETTINGS_KEY: &str = "strata-settings";
+/// Where settings were kept when Strata was called Overlay.
+const OLD_SETTINGS_KEY: &str = "overlay-settings";
 const DOCK_VERSION: u32 = 10;
 
 fn default_dock() -> DockState<Tab> {
@@ -133,11 +135,11 @@ pub struct App {
     window: crate::backdrop::Window,
     /// The glass settings and dark mode last applied, and whether Windows took the backdrop.
     backdrop_set: Option<(theme::Glass, bool, bool)>,
-    /// Frame timing, only when OVERLAY_PERF names a file to write it to.
+    /// Frame timing, only when STRATA_PERF names a file to write it to.
     perf: Option<Perf>,
 }
 
-/// Measures how long Overlay's own work takes per frame. Off unless OVERLAY_PERF=<file> is set;
+/// Measures how long Strata's own work takes per frame. Off unless STRATA_PERF=<file> is set;
 /// then the window redraws continuously and a line of timings is appended every two seconds.
 struct Perf {
     path: PathBuf,
@@ -151,7 +153,7 @@ struct Perf {
 
 impl Perf {
     fn from_env() -> Option<Perf> {
-        let path = PathBuf::from(std::env::var_os("OVERLAY_PERF")?);
+        let path = PathBuf::from(std::env::var_os("STRATA_PERF")?);
         let now = std::time::Instant::now();
         Some(Perf { path, since: now, last: now, frames: 0, work: 0.0, worst: 0.0, gaps: 0.0 })
     }
@@ -197,7 +199,7 @@ impl App {
     }
 
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
+        let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY).or_else(|| eframe::get_value(s, OLD_SETTINGS_KEY))).unwrap_or_default();
         theme::apply(&cc.egui_ctx, settings.appearance);
         let mut ed = Editor::default();
         if let Some(s) = settings.style {
@@ -252,7 +254,7 @@ impl App {
                 }
             }
         }
-        // The board is in front when Overlay opens.
+        // The board is in front when Strata opens.
         if let Some(path) = dock.find_tab(&Tab::Board) {
             let _ = dock.set_active_tab(path);
         }
@@ -327,7 +329,7 @@ impl App {
             ui.set_width(420.0);
             ui.label(theme::semibold("Recover unsaved changes?").size(15.0));
             ui.add_space(2.0);
-            ui.label(theme::secondary(ui, "Overlay closed before these boards were saved. Their autosaved copies can be opened again."));
+            ui.label(theme::secondary(ui, "Strata closed before these boards were saved. Their autosaved copies can be opened again."));
             ui.add_space(10.0);
             for (k, r) in self.recovered.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -349,7 +351,7 @@ impl App {
                 ui.add_space(4.0);
             }
             ui.add_space(8.0);
-            if ui.button("Decide later").on_hover_text("Asked again the next time Overlay opens").clicked() {
+            if ui.button("Decide later").on_hover_text("Asked again the next time Strata opens").clicked() {
                 later = true;
             }
         });
@@ -385,7 +387,7 @@ impl App {
             ui.label(theme::semibold(format!("Save changes to {name}?")).size(15.0));
             ui.add_space(2.0);
             let why = match action {
-                Pending::Close => "If you don't save, changes since the last save are lost when Overlay closes.",
+                Pending::Close => "If you don't save, changes since the last save are lost when Strata closes.",
                 _ => "If you don't save, changes since the last save are lost.",
             };
             ui.label(theme::secondary(ui, why));
@@ -733,7 +735,7 @@ impl App {
         let logo = self
             .logo
             .get_or_insert_with(|| {
-                let img = image::load_from_memory(include_bytes!("../brand/png/overlay-icon-blue-256.png")).map(|i| i.to_rgba8()).unwrap_or_default();
+                let img = image::load_from_memory(include_bytes!("../brand/png/strata-icon-blue-256.png")).map(|i| i.to_rgba8()).unwrap_or_default();
                 let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
                 ctx.load_texture("start-logo", ci, egui::TextureOptions::LINEAR)
             })
@@ -744,7 +746,7 @@ impl App {
         let ui = &mut child;
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         ui.add(egui::Image::new((logo, vec2(72.0, 72.0))));
-        ui.label(egui::RichText::new("Overlay").family(theme::display_family()).size(34.0).color(p.text));
+        ui.label(egui::RichText::new("Strata").family(theme::display_family()).size(34.0).color(p.text));
         ui.label(egui::RichText::new("A whiteboard where every image, sketch, shape and note is a node.").size(14.0).color(p.text_secondary));
         ui.add_space(14.0);
         let big = |t: &str| egui::Button::new(egui::RichText::new(t).size(14.0)).min_size(vec2(w, 36.0));
@@ -797,11 +799,11 @@ impl App {
     }
 
     fn update_title(&mut self, ui: &Ui) {
-        // The app's name, then the board's: "Overlay — name", or "Overlay" alone with no board.
+        // The app's name, then the board's: "Strata — name", or "Strata" alone with no board.
         let t = match self.ed.path.as_ref().and_then(|p| p.file_stem()) {
-            Some(stem) => format!("Overlay — {}", stem.to_string_lossy()),
-            None if self.ed.dirty => "Overlay — Untitled".to_owned(),
-            None => "Overlay".to_owned(),
+            Some(stem) => format!("Strata — {}", stem.to_string_lossy()),
+            None if self.ed.dirty => "Strata — Untitled".to_owned(),
+            None => "Strata".to_owned(),
         };
         if t != self.title {
             ui.ctx().send_viewport_cmd(ViewportCommand::Title(t.clone()));
@@ -896,7 +898,7 @@ impl eframe::App for App {
         self.frame(ui);
         if let Some(perf) = &mut self.perf {
             perf.frame(started, self.ed.board.objects.len(), self.ed.board.wires.len());
-            if std::env::var_os("OVERLAY_PERF_PASSIVE").is_some() {
+            if std::env::var_os("STRATA_PERF_PASSIVE").is_some() {
                 // Log what asked for this redraw, to find redraws that should not happen.
                 let causes = format!("{:?}\n", ui.ctx().repaint_causes());
                 use std::io::Write;
@@ -946,7 +948,7 @@ impl App {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
             let at = ctx.input(|i| i.pointer.hover_pos()).filter(|p| self.ed.canvas_rect.contains(*p)).map(|p| self.ed.camera.to_world(self.ed.canvas_rect.min, p)).unwrap_or_else(|| self.ed.paste_point());
-            let (boards, rest): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("overlay")));
+            let (boards, rest): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("strata") || e.eq_ignore_ascii_case("overlay")));
             // Markdown files become notes, each with a card where they were dropped.
             let (notes, images): (Vec<PathBuf>, Vec<PathBuf>) = rest.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")));
             for (k, path) in notes.iter().enumerate() {

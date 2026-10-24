@@ -1505,7 +1505,7 @@ pub fn note_view(ui: &mut Ui, ed: &mut Editor, nid: Id) {
                                 n.text.push('\n');
                             }
                         }
-                        None => ed.say("That file is not a picture Overlay can read"),
+                        None => ed.say("That file is not a picture Strata can read"),
                     }
                 }
             }

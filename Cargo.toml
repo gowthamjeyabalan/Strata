@@ -1,15 +1,15 @@
 [package]
-name = "overlay"
+name = "strata"
 version = "0.5.0"
 edition = "2024"
 description = "A whiteboard where every image, sketch, shape and flowchart box is a node in a graph"
 license = "MIT"
-repository = "https://github.com/gowthamjeyabalan/overlay"
+repository = "https://github.com/gowthamjeyabalan/strata"
 authors = ["Gowtham Jeyabalan"]
 
 [dependencies]
 # OpenGL renderer: much lighter than the default wgpu one (memory, start-up, binary size). Only the
-# features Overlay uses on Windows; the default fonts stay as the fallback for symbols.
+# features Strata uses on Windows; the default fonts stay as the fallback for symbols.
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence"] }
 egui = "0.36"
 egui_dock = { version = "0.21", features = ["serde"] }

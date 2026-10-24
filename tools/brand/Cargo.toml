@@ -1,8 +1,8 @@
 [package]
-name = "overlay-brand"
+name = "strata-brand"
 version = "0.1.0"
 edition = "2024"
-description = "Generates Overlay's brand kit (SVG, PNG, ICO) into ../../brand"
+description = "Generates Strata's brand kit (SVG, PNG, ICO) into ../../brand"
 publish = false
 
 [dependencies]
