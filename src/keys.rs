@@ -12,6 +12,7 @@ pub enum Action {
     Open,
     Save,
     SaveAs,
+    SaveIncrement,
     Export,
     Search,
     Settings,
@@ -41,6 +42,7 @@ impl Action {
             Action::Open => "Open".into(),
             Action::Save => "Save".into(),
             Action::SaveAs => "Save as".into(),
+            Action::SaveIncrement => "Save increment (the next numbered copy)".into(),
             Action::Export => "Export image".into(),
             Action::Search => "Command menu (search everything)".into(),
             Action::Settings => "Settings".into(),
@@ -65,7 +67,7 @@ impl Action {
 
     /// Works while typing in a text box (file commands with Ctrl, and search).
     pub fn while_typing(self) -> bool {
-        matches!(self, Action::NewBoard | Action::Open | Action::Save | Action::SaveAs | Action::Export | Action::Search | Action::Settings)
+        matches!(self, Action::NewBoard | Action::Open | Action::Save | Action::SaveAs | Action::SaveIncrement | Action::Export | Action::Search | Action::Settings)
     }
 }
 
@@ -112,7 +114,7 @@ pub fn sections() -> Vec<(&'static str, Vec<Action>)> {
     vec![
         ("Command menu", vec![Action::Search]),
         ("Tools", Tool::ALL.into_iter().map(Action::Tool).collect()),
-        ("File", vec![Action::NewBoard, Action::Open, Action::Save, Action::SaveAs, Action::Export, Action::Settings]),
+        ("File", vec![Action::NewBoard, Action::Open, Action::Save, Action::SaveAs, Action::SaveIncrement, Action::Export, Action::Settings]),
         ("Edit", vec![Action::Undo, Action::Redo, Action::SelectAll, Action::Duplicate, Action::Lock, Action::Group, Action::Ungroup, Action::BringFront, Action::SendBack]),
         ("Add", vec![Action::AddItem, Action::InsertImage]),
         ("View", vec![Action::ZoomFit, Action::ZoomSelection, Action::ActualSize, Action::Overview, Action::Present]),
@@ -131,6 +133,7 @@ pub fn default_combo(a: Action) -> Option<Combo> {
         Action::Open => c(O),
         Action::Save => c(S),
         Action::SaveAs => cs(S),
+        Action::SaveIncrement => Some(Combo { alt: true, ..Combo::new(S, true, false) }),
         Action::Export => c(E),
         Action::Search => c(K),
         Action::Settings => c(Comma),

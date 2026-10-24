@@ -82,8 +82,10 @@ Get `overlay.exe` from the [latest release](https://github.com/gowthamjeyabalan/
 - Dark, light, or follow Windows.
 - Windows 11 translucency: Acrylic, Mica or Mica Alt behind the window, as in Windows 11 apps. Settings > Appearance sets the material and how see-through the panels, the board and the menus are.
 
-**Undo**
+**Undo and saving**
 - Ctrl+Z and Ctrl+Y undo and redo the last 100 changes while Overlay is open.
+- Autosave every few minutes (2 by default): to the board's own file, or only to a recovery copy. If Overlay closes without saving, the next start offers the unsaved boards back.
+- Save increment (Ctrl+Alt+S) saves the next numbered copy beside the board (plan-001, plan-002, …) and goes on in it. Backups when saving keeps the file as it was in a "<name> backups" folder, as many as you choose.
 
 **Share**
 - Export the board, the selection or the visible area as PNG or JPG, at up to 4x, with an optional transparent background.
@@ -114,7 +116,7 @@ These are the defaults; every tool and most commands can be given other keys in 
 | Ctrl+, | Settings |
 | F, G, J, F5 | Frame tool, grid note tool, table tool, present |
 | Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline (while typing) |
-| Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | New, open, save, save as |
+| Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+Alt+S | New, open, save, save as, save increment |
 
 Pan with the middle mouse button, the right mouse button on empty board, or hold Space and drag. Holding the right button on an item opens the radial menu. The mouse wheel zooms at the pointer.
 
@@ -144,6 +146,7 @@ Pan with the middle mouse button, the right mouse button on empty board, or hold
 | Calendar | Click a day in the calendar under the notes to highlight what was made or changed that day (Ctrl-click for more days, click again or Clear to stop). The arrows or the mouse wheel change the month. |
 | Panels | Notes, Calendar, Properties, Layers and Frames are dockable tabs. The Window menu turns them on and off, saves the arrangement as a named workspace to come back to, and restores the default layout. |
 | Start view | Shows when Overlay opens (unless a board was opened from Explorer): new board, open, the demo, and recent boards. Settings > Files turns it off, and the last board then opens straight away. |
+| Autosave | Settings > Files: Off, To the file (the board's file is saved; a board never saved gets a recovery copy), or Recovery copy (your file changes only when you save), and how many minutes between saves. Recovery copies are kept in %APPDATA%\Overlay\recovery. Settings > Files also sets how many backups a save keeps. |
 | Colours | In the radial menu, Colour offers the ready colours and the ones picked lately; More colours… opens a picker with a colour square, a hue strip, red, green, blue and hex values, and the colour before and after. |
 
 </details>

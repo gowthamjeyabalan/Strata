@@ -43,6 +43,16 @@ pub struct Editor {
     /// When the board last changed without being recorded yet.
     pending: Option<Instant>,
     pub dirty: bool,
+    /// Where autosave writes, how often (minutes), and how many backups a save keeps (0: none).
+    pub autosave: crate::autosave::Autosave,
+    pub autosave_minutes: u32,
+    pub backups: u32,
+    /// The recovery copy written for this board, if any.
+    pub recovery_file: Option<PathBuf>,
+    /// When the board was last saved, by hand or by autosave.
+    pub saved_at: Instant,
+    /// Names this run's recovery copy of an untitled board.
+    pub session: String,
     pub path: Option<PathBuf>,
 
     pub camera: Camera,
@@ -188,6 +198,12 @@ impl Default for Editor {
             history: Undo::new(&Board::default(), crate::history::STEPS),
             pending: None,
             dirty: false,
+            autosave: Default::default(),
+            autosave_minutes: 2,
+            backups: 0,
+            recovery_file: None,
+            saved_at: Instant::now(),
+            session: chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(),
             path: None,
             camera: Camera::default(),
             selection: Vec::new(),
@@ -310,6 +326,10 @@ impl Editor {
             radial_hold_ms: self.radial_hold_ms,
             undo_steps: self.undo_steps,
             note_mode: self.note_mode,
+            autosave: self.autosave,
+            autosave_minutes: self.autosave_minutes,
+            backups: self.backups,
+            session: self.session.clone(),
             keys: self.keys.clone(),
             custom_colors: self.custom_colors.clone(),
             history: Undo::new(&Board::default(), self.undo_steps),
@@ -1374,6 +1394,19 @@ impl Editor {
     pub fn save_to(&mut self, path: &Path) -> Result<(), String> {
         self.finish_edit();
         self.flush();
+        // The file as it was, kept as a backup when that is switched on.
+        crate::autosave::back_up(path, self.backups);
+        self.write_file(path)?;
+        self.path = Some(path.to_owned());
+        self.dirty = false;
+        self.saved_at = Instant::now();
+        self.drop_recovery();
+        self.say(format!("Saved {}", self.file_name()));
+        Ok(())
+    }
+
+    /// The board as the text of a file.
+    fn file_text(&self) -> Result<String, String> {
         // Written straight from the board, without copying it first.
         #[derive(serde::Serialize)]
         struct Out<'a> {
@@ -1383,14 +1416,91 @@ impl Editor {
             camera: Camera,
         }
         let f = Out { format: FILE_FORMAT, version: 3, board: &self.board, camera: self.camera };
-        let json = serde_json::to_string(&f).map_err(|e| e.to_string())?;
+        serde_json::to_string(&f).map_err(|e| e.to_string())
+    }
+
+    fn write_file(&self, path: &Path) -> Result<(), String> {
+        let json = self.file_text()?;
         let tmp = path.with_extension("overlay.tmp");
         std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-        self.path = Some(path.to_owned());
-        self.dirty = false;
-        self.say(format!("Saved {}", self.file_name()));
-        Ok(())
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
+    /// Remove this board's recovery copy (it was saved, or its changes were let go).
+    pub fn drop_recovery(&mut self) {
+        if let Some(f) = self.recovery_file.take() {
+            crate::autosave::remove_recovery(&f);
+        }
+    }
+
+    /// Autosave when it is due: changes waiting, nothing being dragged or typed, and the interval
+    /// passed since the last save. Returns how long until it is due (to wake up for it).
+    pub fn autosave_tick(&mut self) -> Option<std::time::Duration> {
+        if self.autosave == crate::autosave::Autosave::Off || !self.dirty {
+            return None;
+        }
+        let every = std::time::Duration::from_secs(self.autosave_minutes.clamp(1, 60) as u64 * 60);
+        let since = self.saved_at.elapsed();
+        if since < every {
+            return Some(every - since);
+        }
+        if !matches!(self.drag, crate::canvas::Drag::None) || self.is_editing() {
+            return Some(std::time::Duration::from_secs(5));
+        }
+        self.flush();
+        let to_file = self.autosave == crate::autosave::Autosave::File;
+        match self.path.clone() {
+            Some(path) if to_file => match self.write_file(&path) {
+                Ok(()) => {
+                    self.dirty = false;
+                    self.drop_recovery();
+                    self.say(format!("Autosaved {}", self.file_name()));
+                }
+                Err(e) => self.say(format!("Autosave could not write the file: {e}")),
+            },
+            original => {
+                let file = crate::autosave::recovery_path(original.as_deref(), &self.session);
+                match self.file_text().and_then(|json| crate::autosave::write_recovery(&file, &json, original.as_deref())) {
+                    Ok(()) => {
+                        if self.recovery_file.as_ref().is_some_and(|f| *f != file) {
+                            self.drop_recovery();
+                        }
+                        self.recovery_file = Some(file);
+                        self.say("Autosaved a recovery copy");
+                    }
+                    Err(e) => self.say(format!("Autosave could not write the recovery copy: {e}")),
+                }
+            }
+        }
+        self.saved_at = Instant::now();
+        Some(every)
+    }
+
+    /// Save the next numbered copy (plan-001, plan-002, …) beside the board's file and go on in it.
+    /// A board never saved asks for a name first.
+    pub fn save_increment(&mut self) -> bool {
+        let Some(path) = self.path.clone() else { return self.save(true) };
+        let next = crate::autosave::next_increment(&path);
+        match self.save_to(&next) {
+            Ok(()) => true,
+            Err(e) => {
+                self.say(format!("Could not save: {e}"));
+                false
+            }
+        }
+    }
+
+    /// Open a recovery copy: the board as it was, kept as unsaved changes to its own file.
+    pub fn recover(&mut self, r: &crate::autosave::Recovered) {
+        match self.load(&r.file) {
+            Ok(()) => {
+                self.path = r.original.clone();
+                self.dirty = true;
+                self.recovery_file = Some(r.file.clone());
+                self.say(format!("Recovered {} from {}. Save to keep it.", self.file_name(), r.when));
+            }
+            Err(e) => self.say(format!("Could not recover: {e}")),
+        }
     }
 
     /// Save to the current file, or ask for one. Returns false if the user cancelled or saving failed.

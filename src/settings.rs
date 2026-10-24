@@ -142,7 +142,7 @@ pub fn show(ctx: &egui::Context, win: &mut SettingsWindow, ed: &mut Editor, mut 
                             3 => notes(ui, ed),
                             4 => radial(ui, ed),
                             5 => undo(ui, ed),
-                            6 => files(ui, &mut app),
+                            6 => files(ui, &mut app, ed),
                             7 => shortcuts(ui, win, ed),
                             _ => about(ui),
                         }
@@ -305,11 +305,36 @@ fn undo(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
-fn files(ui: &mut Ui, app: &mut AppPrefs) {
+fn files(ui: &mut Ui, app: &mut AppPrefs, ed: &mut Editor) {
+    use crate::autosave::Autosave;
     group(ui, "STARTING");
     row(ui, "Start view", "When Overlay opens, show the start view with recent boards. When off, the last board opens straight away.", |ui| {
         ui.switch(app.start_view, "");
     });
+    group(ui, "AUTOSAVE");
+    row(ui, "Autosave", "Save changes every few minutes without being asked. To the file: the board's own file is saved (a board never saved gets a recovery copy). Recovery copy only: your file changes only when you save, and the copy is offered back if Overlay closes without saving.", |ui| {
+        ui.set_width(300.0);
+        ui.segmented(&mut ed.autosave, &[(Autosave::Off, "Off"), (Autosave::File, "To the file"), (Autosave::Recovery, "Recovery copy")]);
+    });
+    row(ui, "Every", "How long after a change autosave waits.", |ui| {
+        ui.spacing_mut().slider_width = 170.0;
+        ui.add_enabled(ed.autosave != Autosave::Off, egui::Slider::new(&mut ed.autosave_minutes, 1..=30).suffix(" min"));
+    });
+    group(ui, "INCREMENTS AND BACKUPS");
+    row(ui, "Save increment", "File > Save increment (Ctrl+Alt+S) saves the next numbered copy beside the board (plan-001, plan-002, …) and goes on in it, so each stage stays as it was.", |ui| {
+        if ui.button("Save increment now").clicked() {
+            ed.save_increment();
+        }
+    });
+    row(ui, "Backups when saving", "Each time you save, the file as it was is kept in a \"<name> backups\" folder beside it. Older ones beyond this number are removed. 0 keeps none.", |ui| {
+        ui.spacing_mut().slider_width = 170.0;
+        ui.add(egui::Slider::new(&mut ed.backups, 0..=20));
+    });
+    if ui.button("Open the recovery folder").on_hover_text("Where autosaved recovery copies are kept").clicked() {
+        let dir = crate::autosave::recovery_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    }
 }
 
 fn shortcuts(ui: &mut Ui, win: &mut SettingsWindow, ed: &mut Editor) {

@@ -53,6 +53,9 @@ struct Settings {
     radial_empty: Option<bool>,
     radial_hold_ms: Option<u32>,
     undo_steps: Option<usize>,
+    autosave: Option<crate::autosave::Autosave>,
+    autosave_minutes: Option<u32>,
+    backups: Option<u32>,
     note_mode: Option<u8>,
     ui_scale: Option<f32>,
     reopen_last: Option<bool>,
@@ -123,6 +126,8 @@ pub struct App {
     /// The name being typed for a new workspace.
     ws_name: String,
     logo: Option<egui::TextureHandle>,
+    /// Recovery copies left by a run that did not end cleanly, offered back once.
+    recovered: Vec<crate::autosave::Recovered>,
     /// See-through surfaces and the Windows backdrop.
     glass: theme::Glass,
     window: crate::backdrop::Window,
@@ -219,6 +224,9 @@ impl App {
         ed.radial_empty = settings.radial_empty.unwrap_or(true);
         ed.radial_hold_ms = settings.radial_hold_ms.unwrap_or(300).clamp(150, 1000);
         ed.undo_steps = settings.undo_steps.unwrap_or(crate::history::STEPS).clamp(20, 500);
+        ed.autosave = settings.autosave.unwrap_or_default();
+        ed.autosave_minutes = settings.autosave_minutes.unwrap_or(2).clamp(1, 60);
+        ed.backups = settings.backups.unwrap_or(0).min(50);
         ed.history.set_limit(ed.undo_steps);
         ed.note_mode = settings.note_mode.unwrap_or(1).min(2);
         ed.keys = settings.keys.clone().unwrap_or_default();
@@ -266,6 +274,7 @@ impl App {
             workspaces: settings.workspaces.clone().unwrap_or_default(),
             ws_name: String::new(),
             logo: None,
+            recovered: crate::autosave::find_recovered(),
             glass: settings.glass.unwrap_or_default(),
             window: crate::backdrop::Window::of(cc),
             backdrop_set: None,
@@ -295,6 +304,66 @@ impl App {
                     self.ed.say(format!("Could not open {}: {e}", p.display()));
                 }
             }
+        }
+    }
+
+    /// After a crash: the boards that had unsaved changes, to open again or let go.
+    fn recovery_dialog(&mut self, ctx: &egui::Context) {
+        if self.recovered.is_empty() || self.ask_save.is_some() {
+            return;
+        }
+        let p = pal(ctx);
+        let frame = egui::Frame::new()
+            .fill(p.window_fill)
+            .stroke(egui::Stroke::new(1.0, p.window_stroke))
+            .corner_radius(12)
+            .inner_margin(Margin::same(18))
+            .shadow(ctx.global_style().visuals.window_shadow);
+        let backdrop = egui::Color32::from_black_alpha(if ctx.theme() == egui::Theme::Dark { 120 } else { 60 });
+        let mut open = None;
+        let mut drop = None;
+        let mut later = false;
+        egui::Modal::new(egui::Id::new("recovery")).frame(frame).backdrop_color(backdrop).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.label(theme::semibold("Recover unsaved changes?").size(15.0));
+            ui.add_space(2.0);
+            ui.label(theme::secondary(ui, "Overlay closed before these boards were saved. Their autosaved copies can be opened again."));
+            ui.add_space(10.0);
+            for (k, r) in self.recovered.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let name = r.original.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled board".into());
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(name).size(13.5).color(p.text));
+                        ui.label(theme::secondary(ui, format!("Autosaved {}", r.when)));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let recover = egui::Button::new(theme::semibold("Recover").color(egui::Color32::WHITE)).fill(p.accent);
+                        if ui.add(recover).clicked() {
+                            open = Some(k);
+                        }
+                        if ui.button(egui::RichText::new("Delete").color(p.danger)).on_hover_text("Let these changes go").clicked() {
+                            drop = Some(k);
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+            }
+            ui.add_space(8.0);
+            if ui.button("Decide later").on_hover_text("Asked again the next time Overlay opens").clicked() {
+                later = true;
+            }
+        });
+        if let Some(k) = open {
+            let r = self.recovered.remove(k);
+            self.ed.recover(&r);
+            self.start_open = false;
+            // The others stay for next time.
+            self.recovered.clear();
+        } else if let Some(k) = drop {
+            let r = self.recovered.remove(k);
+            crate::autosave::remove_recovery(&r.file);
+        } else if later {
+            self.recovered.clear();
         }
     }
 
@@ -354,6 +423,7 @@ impl App {
             }
             Some(SaveChoice::Discard) => {
                 self.ask_save = None;
+                self.ed.drop_recovery();
                 self.perform(ctx, action);
             }
             Some(SaveChoice::Cancel) => self.ask_save = None,
@@ -473,6 +543,9 @@ impl App {
                 }
                 if ui.button("Save as…").clicked() {
                     self.ed.save(true);
+                }
+                if ui.button("Save increment").on_hover_text("Save the next numbered copy (plan-001, plan-002, …) and go on in it").clicked() {
+                    self.ed.save_increment();
                 }
                 ui.separator();
                 if ui.button("Insert image…").clicked() {
@@ -906,6 +979,7 @@ impl App {
             egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel_fill(p))).show(ui, |ui| self.start_view(ui));
             crate::settings::show(&ctx, &mut self.settings_win, &mut self.ed, crate::settings::AppPrefs { appearance: &mut self.appearance, ui_scale: &mut self.ui_scale, start_view: &mut self.start_view, glass: &mut self.glass, backdrop_ok: self.backdrop_set.is_some_and(|(_, _, ok)| ok) });
             self.save_dialog(&ctx);
+            self.recovery_dialog(&ctx);
             return;
         }
 
@@ -913,6 +987,9 @@ impl App {
         egui::Panel::top("top-bar").frame(egui::Frame::new().fill(theme::panel_fill(p)).inner_margin(Margin::symmetric(8, 4))).show(ui, |ui| self.top_bar(ui));
         // New items go on the current page and layer; the item list stays in layer order.
         self.ed.board.fix_pages(&mut self.ed.page);
+        if let Some(wait) = self.ed.autosave_tick() {
+            ctx.request_repaint_after(wait);
+        }
         if std::mem::take(&mut self.ed.show_plot) {
             self.show_tab(Tab::Plot);
         }
@@ -985,6 +1062,7 @@ impl App {
         }
         export::window(&ctx, &mut self.ed, &mut self.export);
         self.save_dialog(&ctx);
+        self.recovery_dialog(&ctx);
 
         // Turn settled changes into states.
         self.ed.tick(&ctx);
@@ -1008,6 +1086,7 @@ impl App {
             Action::Open => Cmd::Open,
             Action::Save => Cmd::Save,
             Action::SaveAs => Cmd::SaveAs,
+            Action::SaveIncrement => Cmd::SaveIncrement,
             Action::Export => Cmd::Export,
             Action::Settings => Cmd::Settings,
             Action::Undo => Cmd::Undo,
@@ -1051,6 +1130,9 @@ impl App {
             }
             Cmd::SaveAs => {
                 ed.save(true);
+            }
+            Cmd::SaveIncrement => {
+                ed.save_increment();
             }
             Cmd::Export => self.export.open = true,
             Cmd::InsertImage => ed.pick_images(),
@@ -1129,6 +1211,9 @@ impl App {
             radial_empty: Some(self.ed.radial_empty),
             radial_hold_ms: Some(self.ed.radial_hold_ms),
             undo_steps: Some(self.ed.undo_steps),
+            autosave: Some(self.ed.autosave),
+            autosave_minutes: Some(self.ed.autosave_minutes),
+            backups: Some(self.ed.backups),
             note_mode: Some(self.ed.note_mode),
             ui_scale: Some(self.ui_scale),
             reopen_last: None,
