@@ -20,10 +20,10 @@
 
 From the [latest release](https://github.com/gowthamjeyabalan/strata/releases/latest), either:
 
-- **Install it:** `Strata-<version>.msix` adds Strata to the Start menu, opens `.strata` boards from Explorer, and uninstalls from Settings > Apps. The package is signed with a self-signed certificate, so each PC must trust it once before the first install: download `Strata.cer`, double-click it, choose **Install Certificate…**, **Local Machine**, then **Place all certificates in the following store** > **Trusted People**, and finish (this needs administrator rights). After that, double-click the `.msix` and choose Install. Updates install the same way.
+- **Install it:** run `strata-setup-x64.exe`. It installs for you alone (no administrator needed) or, if you choose, for everyone on the PC, adds Strata to the Start menu (and the desktop if you like), opens `.strata` boards from Explorer, and uninstalls from Settings > Apps. Windows may show "Windows protected your PC" for a new app: choose **More info**, then **Run anyway**.
 - **Or run it portable:** `strata.exe` is a single 11 MB file with nothing to install.
 
-Both need Windows 10 (1809) or 11. Try it on [`examples/demo.strata`](examples/demo.strata). Strata was called Overlay until 0.6.0; its settings and `.overlay` boards carry over.
+Both need Windows 10 or 11. Try it on [`examples/demo.strata`](examples/demo.strata). Strata was called Overlay until 0.6.0; its settings and `.overlay` boards carry over.
 
 ## Features
 
@@ -168,7 +168,7 @@ cargo run --release
 
 `cargo run --release -- path\to\board.strata` opens a board directly. Use the release build: debug builds are much slower.
 
-The installer is an MSIX package built with the Windows SDK: `installer\make-cert.ps1` makes the signing certificate once, then `installer\build-msix.ps1` packs and signs `target\release\strata.exe` into `target\Strata-<version>.msix`.
+The installer is built with [Inno Setup 6](https://jrsoftware.org/isinfo.php) from `installer\strata.iss`: after `cargo build --release`, run `ISCC.exe /DAppVersion=<version> installer\strata.iss` to get `dist\strata-setup-x64.exe`. Pushing a `v*` tag does all of this on GitHub (`.github/workflows/release.yml`): it tests, builds, and publishes the release with the installer and the portable exe.
 
 ## How it is built
 
